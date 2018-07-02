@@ -1,0 +1,309 @@
+
+type Index = i32;
+type AllocFn = fn(i32) -> Buffer;
+
+
+//-------------------------------------------------------------------
+// matrix accessor
+//-------------------------------------------------------------------
+
+type MatrixElem  = i32;
+
+type ReadMatrixFn  = fn(Index) -> MatrixElem;
+type WriteMatrixFn = fn(Index, MatrixElem) -> ();
+
+struct Matrix {
+    buf:        Buffer,
+    height:     Index,
+    width:      Index,
+    mem_height: Index,
+    mem_width:  Index
+}
+
+struct MatrixAcc {
+    read:  fn(Index, Index) -> MatrixElem,
+    write: fn(Index, Index, MatrixElem) -> ()
+}
+
+fn new_matrix(height: Index, width: Index, mem_height: Index, mem_width: Index, buf: Buffer) -> Matrix{
+    Matrix {
+        buf:        buf,
+        height:     height,
+        width:      width,
+        mem_height: mem_height,
+        mem_width:  mem_width
+    }
+}
+
+fn alloc_matrix(matrix: Matrix, alloc: AllocFn) -> Matrix {
+    new_matrix(matrix.height, matrix.width, matrix.mem_height, matrix.mem_width, alloc((matrix.mem_height) * (matrix.mem_width) * sizeof[MatrixElem]()))
+}
+
+fn create_matrix(height: Index, width: Index, pad_h: Index, pad_w: Index, alloc: AllocFn) -> Matrix {
+    let mem_height = height + pad_h + 1;
+    let mem_width  = width + pad_w + 1;
+    new_matrix(height, width, mem_height, mem_width, alloc(mem_height * mem_width * sizeof[MatrixElem]()))
+}
+
+fn copy_matrix(src: Matrix, dst: Matrix) -> () {
+    copy(src.buf, dst.buf);
+}
+
+fn make_matrix_acc_std_offset(matrix: Matrix, read: ReadMatrixFn, write: WriteMatrixFn, oi: Index, oj: Index) -> MatrixAcc{
+    MatrixAcc{
+        read:  |i, j|         read((i + oi + 1) * (matrix.mem_width) + j + oj + 1),
+        write: |i, j, value| write((i + oi + 1) * (matrix.mem_width) + j + oj + 1, value)
+    }
+}
+
+fn make_matrix_acc_coal_offset(matrix: Matrix, read: ReadMatrixFn, write: WriteMatrixFn, oi: Index, oj: Index) -> MatrixAcc{
+        
+    let get_coal_position = |i: Index, j: Index| -> Index {
+        ((i + oi + j + oj + 2) % matrix.mem_height) * (matrix.mem_width) + j + oj
+    };
+
+    MatrixAcc{
+        read:  |i, j|        read(get_coal_position(i, j)),
+        write: |i, j, value| write(get_coal_position(i, j), value)
+    }
+}
+
+//-------------------------------------------------------------------
+// matrix with byte-size entries
+//-------------------------------------------------------------------
+
+type MatrixSElem  = u8;
+
+type ReadMatrixSFn  = fn(Index) -> MatrixSElem;
+type WriteMatrixSFn = fn(Index, MatrixSElem) -> ();
+
+struct MatrixS {
+    buf:        Buffer,
+    height:     Index,
+    width:      Index,
+    mem_height: Index,
+    mem_width:  Index
+}
+
+struct MatrixSAcc {
+    read:  fn(Index, Index) -> MatrixSElem,
+    write: fn(Index, Index, MatrixSElem) -> ()
+}
+
+fn new_matrix_s(height: Index, width: Index, mem_height: Index, mem_width: Index, buf: Buffer) -> MatrixS{
+    MatrixS {
+        buf:        buf,
+        height:     height,
+        width:      width,
+        mem_height: mem_height,
+        mem_width:  mem_width
+    }
+}
+
+fn alloc_matrix_s(matrix: MatrixS, alloc: AllocFn) -> MatrixS {
+    new_matrix_s(matrix.height, matrix.width, matrix.mem_height, matrix.mem_width, alloc((matrix.mem_height) * (matrix.mem_width) * sizeof[MatrixSElem]()))
+}
+
+fn create_matrix_s(height: Index, width: Index, pad_h: Index, pad_w: Index, alloc: AllocFn) -> MatrixS {
+    let mem_height = height + pad_h + 1;
+    let mem_width  = width + pad_w + 1;
+    new_matrix_s(height, width, mem_height, mem_width, alloc(mem_height * mem_width * sizeof[MatrixSElem]()))
+}
+
+fn copy_matrix_s(src: MatrixS, dst: MatrixS) -> () {
+    copy(src.buf, dst.buf);
+}
+
+fn get_matrix_s_acc_std_offset(matrix: MatrixS, read: ReadMatrixSFn, write: WriteMatrixSFn, oi: Index, oj: Index) -> MatrixSAcc{
+    MatrixSAcc{
+        read:  |i, j|         read((i + oi + 1) * (matrix.mem_width) + j + oj + 1),
+        write: |i, j, value| write((i + oi + 1) * (matrix.mem_width) + j + oj + 1, value)
+    }
+}
+
+fn get_matrix_s_acc_coal_offset(matrix: MatrixS, read: ReadMatrixSFn, write: WriteMatrixSFn, oi: Index, oj: Index) -> MatrixSAcc{
+        
+    let get_coal_position = |i: Index, j: Index| -> Index {
+        ((i + oi + j + oj + 2) % matrix.mem_height) * (matrix.mem_width) + j + oj + 1
+    };
+
+    MatrixSAcc{
+        read:  |i, j|        read(get_coal_position(i, j)),
+        write: |i, j, value| write(get_coal_position(i, j), value)
+    }
+}
+
+
+//-------------------------------------------------------------------
+// vector accessors
+//-------------------------------------------------------------------
+struct Vector {
+    buf:        Buffer,
+    length:     Index,
+    mem_length: Index,
+}
+
+struct VectorAcc {
+    read:  fn(Index) -> MatrixElem,
+    write: fn(Index, MatrixElem) -> ()
+}
+
+struct RotationAcc {
+    read_upper:   fn(Index) -> MatrixElem,
+    read_middle:  fn(Index) -> MatrixElem,
+    read_lower:   fn(Index) -> MatrixElem,
+    write_upper:  fn(Index, MatrixElem) -> (),
+    write_middle: fn(Index, MatrixElem) -> (),
+    write_lower:  fn(Index, MatrixElem) -> (),
+    rotate:       fn() -> ()
+}
+
+fn new_vector(length: Index, mem_length: Index, buf: Buffer) -> Vector{
+    Vector{
+        buf:        buf,
+        length:     length,
+        mem_length: mem_length,
+    }
+}
+
+fn alloc_vector(vector: Vector, alloc: AllocFn) -> Vector{
+    new_vector(vector.length, vector.mem_length, alloc(vector.mem_length * sizeof[MatrixElem]()))
+}
+
+fn create_vector(length: Index, pad: Index, alloc: AllocFn) -> Vector{
+    let mem_length = length + pad + 1;
+    new_vector(length, mem_length, alloc(mem_length * sizeof[MatrixElem]()))
+}
+
+fn copy_vector(src: Vector, dst: Vector) -> () {
+    copy(src.buf, dst.buf);
+}
+
+fn copy_vector_offset(src: Vector, src_start: Index, dst: Vector, dst_start: Index, length: Index) -> (){
+    copy_offset(src.buf, src_start * sizeof[MatrixElem](), dst.buf, dst_start * sizeof[MatrixElem](),  (length + 1) * sizeof[MatrixElem]());
+}
+
+fn get_vector_acc_cpu(vector: Vector) -> VectorAcc{
+    get_vector_acc(read_vector_cpu(vector), write_vector_cpu(vector))
+}
+
+fn get_vector_acc(read: ReadMatrixFn, write: WriteMatrixFn) -> VectorAcc{
+    get_vector_acc_offset(read, write, 0)
+}
+
+fn get_vector_acc_offset(read: ReadMatrixFn, write: WriteMatrixFn, offset: Index) -> VectorAcc{
+    VectorAcc{
+        read:  |i|        read(i + offset + 1),
+        write: |i, value| write(i + offset + 1, value)
+    }
+}
+
+fn get_rotation_acc(read: ReadMatrixFn, write: WriteMatrixFn, length: Index) -> RotationAcc{
+    let vec_acc = get_vector_acc(read, write);
+    
+    let mut offset_upper  = 0;
+    let mut offset_middle = length + 1;
+    let mut offset_lower  = 2 * (length + 1);
+    
+    let rotate = || {
+        let temp = offset_upper;
+        offset_upper = offset_middle;
+        offset_middle = offset_lower;
+        offset_lower  = temp;
+    };
+
+    RotationAcc{
+        read_upper:   |i|    vec_acc.read(i + offset_upper),
+        read_middle:  |i|    vec_acc.read(i + offset_middle),
+        read_lower:   |i|    vec_acc.read(i + offset_lower),
+        write_upper:  |i, v| vec_acc.write(i + offset_upper, v),
+        write_middle: |i, v| vec_acc.write(i + offset_middle, v),
+        write_lower:  |i, v| vec_acc.write(i + offset_lower, v),
+        rotate:       rotate
+    }
+}
+
+//-------------------------------------------------------------------
+// sequence accessor 
+//-------------------------------------------------------------------
+type SequenceElem = u8;
+
+type ReadSequenceFn  = fn(Index) -> SequenceElem;
+type WriteSequenceFn = fn(Index, SequenceElem) -> ();
+
+struct Sequence {
+    buf:        Buffer,
+    length:     Index,
+    mem_length: Index
+}
+
+struct SequenceAcc {
+    read:  fn(Index) -> SequenceElem,
+    write: fn(Index, SequenceElem) -> ()
+}
+
+fn new_sequence(length: Index, mem_length: Index, buf: Buffer) -> Sequence {
+    Sequence {
+        buf:        buf,
+        length:     length,
+        mem_length: mem_length
+    }
+}
+
+fn alloc_sequence(sequence: Sequence, pad: Index, alloc: AllocFn) -> Sequence{
+    let mem_length = sequence.length + pad;
+    new_sequence(sequence.length, mem_length, alloc(mem_length * sizeof[SequenceElem]()))
+}
+
+fn create_sequence(length: Index, pad: Index, alloc: AllocFn) -> Sequence{
+    let mem_length = length + pad;
+    new_sequence(length, mem_length, alloc(mem_length * sizeof[SequenceElem]()))
+}
+
+fn wrap_sequence(data: &[SequenceElem], length: Index) -> Sequence{
+    let buf = Buffer{
+        device: 0,
+        data: bitcast[&[i8]](data),
+        size: length as i64
+    };
+    new_sequence(length, length, buf)
+}
+
+fn copy_sequence(src: Sequence, dst: Sequence) -> () {
+    copy(src.buf, dst.buf);
+}
+
+fn get_sequence_acc_cpu(sequence: Sequence) -> SequenceAcc{
+    get_sequence_acc(read_sequence_cpu(sequence), write_sequence_cpu(sequence))
+}
+
+fn get_sequence_acc(read: ReadSequenceFn, write: WriteSequenceFn) -> SequenceAcc{
+    get_sequence_acc_offset(read, write, 0)
+}
+
+fn get_sequence_acc_offset(read: ReadSequenceFn, write: WriteSequenceFn, offset: Index) -> SequenceAcc{
+    SequenceAcc{
+        read:  |i|        read(i + offset),
+        write: |i, value| write(i + offset, value)
+    }
+}
+
+fn get_sequence_acc_offset_reversed(read: ReadSequenceFn, write: WriteSequenceFn, offset: Index) -> SequenceAcc{
+    SequenceAcc{
+        read:  |i|        read(offset - i),
+        write: |i, value| write(offset - i, value)
+    }
+}
+
+fn read_matrix_cpu(matrix: Matrix) -> ReadMatrixFn { |idx| bitcast[&[MatrixElem]](matrix.buf.data)(idx) }
+fn write_matrix_cpu(matrix: Matrix) -> WriteMatrixFn { |idx, val| bitcast[&mut[MatrixElem]](matrix.buf.data)(idx) = val }
+
+fn read_matrix_s_cpu(matrix: MatrixS) -> ReadMatrixSFn { |idx| bitcast[&[MatrixSElem]](matrix.buf.data)(idx) }
+fn write_matrix_s_cpu(matrix: MatrixS) -> WriteMatrixSFn { |idx, val| bitcast[&mut[MatrixSElem]](matrix.buf.data)(idx) = val }
+
+fn read_vector_cpu(vector: Vector) -> ReadMatrixFn { |idx| bitcast[&[MatrixElem]](vector.buf.data)(idx) }
+fn write_vector_cpu(vector: Vector) -> WriteMatrixFn { |idx, val| bitcast[&mut[MatrixElem]](vector.buf.data)(idx) = val }
+
+fn read_sequence_cpu(sequence: Sequence) -> ReadSequenceFn { |idx| bitcast[&[SequenceElem]](sequence.buf.data)(idx) }
+fn write_sequence_cpu(sequence: Sequence) -> WriteSequenceFn { |idx, val| bitcast[&mut[SequenceElem]](sequence.buf.data)(idx) = val }
+

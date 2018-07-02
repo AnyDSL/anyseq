@@ -1,0 +1,16 @@
+fn @accelerator(dev: i32) -> Accelerator { amdgpu_accelerator(dev) }
+static device_id = 1;
+static math = amdgpu_intrinsics;
+static atomic_add_global = amdgcn_atomic_add_global;
+static atomic_add_shared = amdgcn_atomic_add_shared;
+static atomic_min_global = amdgcn_atomic_min_global;
+static atomic_min_shared = amdgcn_atomic_min_shared;
+fn @is_nvvm() -> bool { false }
+fn @is_cuda() -> bool { false }
+fn @is_opencl() -> bool { false }
+fn @is_amdgpu() -> bool { true }
+fn @is_x86() -> bool { false }
+fn @is_sse() -> bool { false }
+fn @is_avx() -> bool { false }
+fn @is_avx2() -> bool { false }
+fn @has_ldg() -> bool { false }

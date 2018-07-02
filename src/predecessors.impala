@@ -1,0 +1,61 @@
+struct PredecessorMatrix {
+    get_iteration_acc: fn(Index, Index, Index, Index, IterationInfo) -> PredecessorMatrixAcc,
+    get_matrix_cpu:    fn() -> MatrixS,
+    release:           fn() -> ()
+}
+
+struct PredecessorMatrixAcc{
+    write: fn(Index, Index, Predecessor) -> ()
+}
+
+fn full_predecessors(height: Index, width: Index, scheme: AlignmentScheme) -> PredecessorMatrix{
+    
+    let matrix = create_matrix_s(height, width, get_padding_h(), get_padding_w(), alloc_device);
+    
+    //initialize matrix
+    for i, mat_acc in iteration_matrix_s_1d(matrix, matrix.height + 1){ mat_acc.write(i-1,  -1, scheme.init_predc_rows(i-1)); }
+    for i, mat_acc in iteration_matrix_s_1d(matrix, matrix.width){ mat_acc.write( -1, i, scheme.init_predc_cols(i)); }
+
+
+    let get_iteration_acc = |offset_i, offset_j, _, _, it| {
+
+        let mat_acc = get_matrix_s_acc_offset(matrix, read_matrix_s(matrix), write_matrix_s(matrix), offset_i, offset_j);
+
+        PredecessorMatrixAcc{
+            write:     |i, j, val| mat_acc.write(i, j, val)
+        }
+    };
+
+    PredecessorMatrix {
+        get_iteration_acc:    get_iteration_acc,
+        get_matrix_cpu:    || get_matrix_s_cpu(matrix),
+        release:           || release(matrix.buf)
+    }
+}
+
+fn predecessors_blockwise(height: Index, num_blocks: Index, block_width: Index, scheme: AlignmentScheme) -> PredecessorMatrix{
+    
+    let predc_height = height + num_blocks - 1;
+    let predc = create_matrix_s(predc_height, block_width, 0, 0, alloc_device);
+
+    PredecessorMatrix{
+        get_iteration_acc:    get_traceback_acc(block_width, predc, scheme),
+        get_matrix_cpu:    || get_matrix_s_cpu(predc),
+        release:           || release(predc.buf)
+    }
+}
+
+fn no_predc() -> PredecessorMatrix{
+
+    let get_acc_offset = |offset_i: Index, offset_j: Index, height: Index, width: Index, it: IterationInfo| {
+        PredecessorMatrixAcc{
+            write:             |_, _, _| {}
+        }
+    };
+
+    PredecessorMatrix {
+        get_iteration_acc:    get_acc_offset,
+        get_matrix_cpu:    || create_matrix_s(0, 0, 0, 0, alloc_cpu),
+        release:           || {}
+    }
+}

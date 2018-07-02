@@ -1,0 +1,224 @@
+//-------------------------------------------------------------------
+
+fn @min(a: Index, b: Index) -> Index { if a < b { a } else { b } }
+fn @max(a: Index, b: Index) -> Index { if a > b { a } else { b } }
+
+fn @min3(a: Index, b: Index, c: Index) -> Index { min(min(a, b), c) }
+fn @max3(a: Index, b: Index, c: Index) -> Index { max(max(a, b), c) }
+
+fn @abs(a: Index) -> Index { if a < 0 { -a } else { a } }
+
+
+fn @round_up_div(a: Index, b: Index) -> Index{
+    (a + b - 1) / b 
+}
+
+fn @round_up(num: i32, multiple: i32) -> i32 { ((num + multiple - 1) / multiple) * multiple }
+fn @round_down(num: i32, multiple: i32) -> i32 { (num / multiple) * multiple }
+
+fn @next_pow_2(i: Index) -> Index {
+    if i == 0 { return(0) }
+    let mut n = i - 1;
+    let mut r = 1;
+    while n > 0 {
+        n >>= 1;
+        r <<= 1;
+    }
+    r
+}
+
+fn reduce_max(vector: Vector, offset: Index, length: Index) -> (MatrixElem, MatrixElem){
+
+    let index_vec = create_vector(1, 0, alloc_cpu);
+    let score_vec = create_vector(1, 0, alloc_cpu);
+
+    let ind_acc = get_vector_acc_cpu(index_vec);
+    let sco_acc = get_vector_acc_cpu(score_vec);
+
+    for a, b in iteration_reduction(vector, index_vec, score_vec, offset, length){
+        a > b
+    }
+
+    let score = sco_acc.read(0);
+    let index = ind_acc.read(0);
+    
+    release(index_vec.buf);
+    release(score_vec.buf);
+
+    (score, index)
+}
+
+fn print_matrix(query: Sequence, subject: Sequence, scores: Matrix) -> () {
+    let que_acc = get_sequence_acc_cpu(query);
+    let sub_acc = get_sequence_acc_cpu(subject);
+    let sco_acc = make_matrix_acc_cpu(scores);
+    print_string("\n\n\t\t");
+    for i in range(0, subject.length){
+        print_char(sub_acc.read(i) as u8);
+        print_string("\t");
+    }
+    print_string("\n\n\n");
+    for i in range(-1, scores.height){
+        if i >= 0 {
+            print_char(que_acc.read(i) as u8);
+        }
+        print_string("\t");
+        for j in range(-1, scores.width){
+            print_i32(sco_acc.read(i,j) as i32);
+            print_string("\t");
+        }
+        print_string("\n\n\n");
+    }
+    print_string("\n\n");
+}
+
+fn print_matrix_s(query: Sequence, subject: Sequence, scores: MatrixS) -> () {
+    let que_acc = get_sequence_acc_cpu(query);
+    let sub_acc = get_sequence_acc_cpu(subject);
+    let sco_acc = get_matrix_s_acc_cpu(scores);
+    print_string("\n\n\t\t");
+    for i in range(0, subject.length){
+        print_char(sub_acc.read(i) as u8);
+        print_string("\t");
+    }
+    print_string("\n\n\n");
+    for i in range(-1, scores.height){
+        if i >= 0 {
+            print_char(que_acc.read(i) as u8);
+        }
+        print_string("\t");
+        for j in range(-1, scores.width){
+            print_i32(sco_acc.read(i,j) as i32);
+            print_string("\t");
+        }
+        print_string("\n\n\n");
+    }
+    print_string("\n\n");
+}
+
+
+fn print_last_matrix_score(scores: Matrix) -> () {
+    let sco_acc = make_matrix_acc_cpu(scores);
+    let last_score = sco_acc.read(scores.height-1, scores.width-1);
+    
+    print_string("\nlast score matrix entry: ");
+    print_i32(last_score as i32);
+    print_string("\n");
+}
+
+fn print_last_vector_score(scores: Vector) -> (){
+    let sco_acc = get_vector_acc_cpu(scores);
+    let last_score = sco_acc.read(scores.length -1);
+
+    print_string("\nlast score vector entry: ");
+    print_i32(last_score as i32);
+    print_string("\n");
+}
+
+fn print_vector(vec: Vector) -> () {
+    let vec_acc = get_vector_acc_cpu(vec);
+    for i in range(-1, vec.length){
+        print_i32(vec_acc.read(i) as i32);
+        print_string(" ");
+    }
+    print_string("\n");
+}
+
+
+fn print_sequence(seq: Sequence) -> () {
+    let seq_acc = get_sequence_acc_cpu(seq);
+    for i in range(0, seq.length){
+        print_char(seq_acc.read(i) as u8);
+    }
+}
+
+fn print_sequence_no_empty(seq: Sequence, empty_sym: SequenceElem) -> () {
+    let seq_acc = get_sequence_acc_cpu(seq);
+    for i in range(0, seq.length){
+        let sym = seq_acc.read(i);
+        if sym != empty_sym {
+            print_char(sym as u8);
+        }
+    }
+    print_string("\n");
+
+}
+
+fn p(text: &[u8], val: i32) -> (){
+    print_string(text);
+    print_string(": ");
+    print_i32(val);
+    print_string("\n");
+}
+
+//-------------------------------------------------------------------
+//benchmarks (from: stincilla/utils.impala)
+
+static mut total_kernel_timing = 0i64;
+static mut total_cpu_timing = 0i64;
+
+fn @benchmark(get_time: fn() -> i64, num_iter: i32, body: fn() -> (), sync: fn() -> ()) -> i64 {
+    0 as i64
+}
+
+// fn @benchmark(get_time: fn() -> i64, num_iter: i32, body: fn() -> (), sync: fn() -> ()) -> i64 {
+//     let times_buf = alloc_cpu(num_iter * sizeof[i64]());
+//     let times = bitcast[&mut[i64]](times_buf.data);
+//     for i in range(0, num_iter) {
+//         let start = get_time();
+//         body();
+//         sync();
+//         times(i) = get_time() - start;
+//     }
+//     sort_i64(num_iter, times);
+//     print_string("Timing: ");
+//     print_f64(times(num_iter/2) as f64 / 1000.0);
+//     print_string(" | ");
+//     print_f64(times(0) as f64 / 1000.0);
+//     print_string(" | ");
+//     print_f64(times(num_iter-1) as f64 / 1000.0);
+//     print_string(" (median(");
+//     print_i32(num_iter);
+//     print_string(") | minimum | maximum) ms\n");
+//     let median = times(num_iter/2);
+//     release(times_buf);
+//     median
+// }
+
+static iter_acc =  1;
+static iter_cpu = 1;
+fn @benchmark_acc(acc: Accelerator, body: fn() -> ()) -> () { total_kernel_timing += benchmark(get_kernel_time, iter_acc, body, acc.sync) }
+fn @benchmark_cpu(                  body: fn() -> ()) -> () { total_cpu_timing    += benchmark(get_micro_time,  iter_cpu, body, ||) }
+
+
+
+fn print_total_timing() -> () {
+    print_string("Total timing for cpu / kernel: ");
+    print_f64(total_cpu_timing as f64 / 1000.0);
+    print_string(" / ");
+    print_f64(total_kernel_timing as f64 / 1000.0);
+    print_string(" ms\n")
+}
+
+fn sort_i64(num: i32, arr: &mut[i64]) -> () {
+    // insertion sort
+    for i in range(1, num) {
+        let x = arr(i);
+        let mut j = i;
+        while j > 0 && arr(j-1) > x {
+            arr(j) = arr(j-1);
+            j = j - 1;
+        }
+        arr(j) = x;
+    }
+}
+
+static mut start_time = 0i64;
+fn timer_start() -> (){start_time = get_micro_time()}
+fn timer_stop() -> (){
+    let time = get_micro_time() - start_time;
+    print_string("Timer: ");
+    print_f64(time as f64 / 1000.0);
+    print_string("\n");
+}
+

@@ -1,0 +1,16 @@
+fn @accelerator(dev: i32) -> Accelerator { nvvm_accelerator(dev) }
+static device_id = 0;
+static math = nvvm_intrinsics;
+static atomic_add_global = nvvm_atomic_add_global;
+static atomic_add_shared = nvvm_atomic_add_shared;
+static atomic_min_global = nvvm_atomic_min_global;
+static atomic_min_shared = nvvm_atomic_min_shared;
+fn @is_nvvm() -> bool { true }
+fn @is_cuda() -> bool { false }
+fn @is_opencl() -> bool { false }
+fn @is_amdgpu() -> bool { false }
+fn @is_x86() -> bool { false }
+fn @is_sse() -> bool { false }
+fn @is_avx() -> bool { false }
+fn @is_avx2() -> bool { false }
+fn @has_ldg() -> bool { true }

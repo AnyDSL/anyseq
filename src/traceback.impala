@@ -1,0 +1,80 @@
+static GAP_SYM   = '_';
+static EMPTY_SYM = ' ';
+
+
+struct TracebackModule{
+    traceback:             fn(MatrixS, (Index, Index)) -> (),
+    traceback_offset:      fn(MatrixSAcc, Index, Index, (Index, Index)) -> (),
+    get_alignment_query:   fn() -> Sequence,
+    get_alignment_subject: fn() -> Sequence,
+    get_alignment_start:   fn() -> (Index, Index)
+}
+
+
+fn create_traceback_module(query: Sequence, subject: Sequence,
+                           query_out: Sequence, subject_out: Sequence) -> TracebackModule
+{
+    let que_out_acc = get_sequence_acc_cpu(query_out);
+    let sub_out_acc = get_sequence_acc_cpu(subject_out);
+
+    for i in range(0, query_out.length){
+        que_out_acc.write(i, EMPTY_SYM);
+        sub_out_acc.write(i, EMPTY_SYM);
+    }
+
+    let mut alignment_start = (0, 0);
+
+    let traceback_offset_fn = |pre_acc: MatrixSAcc, offset_query: Index, offset_subject: Index, end: (Index, Index)| {
+
+        let que_acc_in  = get_sequence_acc_offset(read_sequence_cpu(query), write_sequence_cpu(query), offset_query);
+        let sub_acc_in  = get_sequence_acc_offset(read_sequence_cpu(subject), write_sequence_cpu(subject), offset_subject);
+        let que_acc_out = get_sequence_acc_offset(read_sequence_cpu(query_out), write_sequence_cpu(query_out), offset_query + offset_subject);
+        let sub_acc_out = get_sequence_acc_offset(read_sequence_cpu(subject_out), write_sequence_cpu(subject_out), offset_query + offset_subject);
+
+        traceback_offset(que_acc_in, sub_acc_in, que_acc_out, sub_acc_out, pre_acc, end)
+    };
+
+    TracebackModule{
+        traceback:             |predc, end|           alignment_start = traceback_offset_fn(get_matrix_s_acc_cpu(predc), 0, 0, end),
+        traceback_offset:      |pre_acc, oi, oj, end| { traceback_offset_fn(pre_acc, oi, oj, end); },
+        get_alignment_query:   ||                     query_out,
+        get_alignment_subject: ||                     subject_out,
+        get_alignment_start:   ||                     alignment_start
+    }
+}
+
+
+fn traceback_offset(que_acc_in: SequenceAcc, sub_acc_in: SequenceAcc, 
+                    que_acc_out: SequenceAcc, sub_acc_out: SequenceAcc, 
+                    pre_acc: MatrixSAcc, end: (Index, Index)) 
+    -> (Index, Index)
+{
+
+    let (mut i, mut j) = end;
+    let mut pred = pre_acc.read(i, j);
+
+    while pred != PRED_NONE {
+        
+        let mut sym_q = GAP_SYM;
+        let mut sym_s = GAP_SYM;
+
+        let out_pos = i + j + 1;
+        
+        if pred == PRED_NO_GAP || pred == PRED_GAP_S{
+            sym_q = que_acc_in.read(i);
+            i--;
+        }
+        if pred == PRED_NO_GAP || pred == PRED_GAP_Q{
+            sym_s = sub_acc_in.read(j);
+            j--;
+        }
+
+        que_acc_out.write(out_pos, sym_q);
+        sub_acc_out.write(out_pos, sym_s);
+
+        pred = pre_acc.read(i, j);
+    }
+
+    (i + 1, j + 1)
+
+}

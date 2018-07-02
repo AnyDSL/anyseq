@@ -1,0 +1,56 @@
+static math = cpu_intrinsics;
+fn @is_nvvm() -> bool { false }
+fn @is_cuda() -> bool { false }
+fn @is_opencl() -> bool { false }
+fn @is_amdgpu() -> bool { false }
+fn @is_x86() -> bool { true }
+fn @is_sse() -> bool { true }
+fn @is_avx() -> bool { true }
+fn @is_avx2() -> bool { false }
+
+fn @get_vector_length() -> i32 { 8 }
+fn @get_alignment() -> i32 { 32 }
+fn @get_thread_count() -> i32 { 4 }
+
+// amount of full vector iterations that trigger loop vectorization
+static simd_iter_threshold = 2;
+
+fn @outer_loop(lower: i32, upper: i32, body: fn(i32) -> ()) -> () {
+    for i in parallel(get_thread_count(), lower, upper) {
+        @@body(i);
+    }
+}
+fn @outer_loop_step(lower: i32, upper: i32, step: i32, body: fn(i32) -> ()) -> () {
+    for i in parallel(get_thread_count(), 0, (upper - lower) / step) {
+        @@body(i * step + lower);
+    }
+}
+
+fn @inner_loop(lower: i32, upper: i32, body: fn(i32) -> ()) -> () {
+    if upper - lower < get_vector_length() * simd_iter_threshold {
+        range(lower, upper, body);
+    } else {
+        let peel_end = round_up(lower, get_vector_length());
+        let remainder_start = round_up(upper - get_vector_length() + 1, get_vector_length());
+
+        range(lower, peel_end, body);
+        for i in vectorize(get_vector_length(), get_alignment(), peel_end, remainder_start) {
+            @@body(i);
+        }
+        range(remainder_start, upper, body);
+    }
+}
+
+fn @inner_loop_step(lower: i32, upper: i32, step: i32, body: fn(i32) -> ()) -> () {
+    if upper - lower < get_vector_length() * simd_iter_threshold * step {
+        range_step(lower, upper, step, body);
+    } else {
+        let iter_vec = (upper - lower) / (step * get_vector_length());
+        let remainder_start = lower + iter_vec * get_vector_length() * step;
+
+        for i in vectorize(get_vector_length(), 4, 0, iter_vec * get_vector_length()) {
+            @@body(i * step + lower);
+        }
+        range_step(remainder_start, upper, step, body);
+    }
+}

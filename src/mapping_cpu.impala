@@ -1,0 +1,85 @@
+fn create_device_matrix(height: Index, width: Index) -> Matrix{
+    create_matrix(height, width, 0, 0, alloc_cpu)
+}
+
+
+fn sequences_to_device(query_cpu: Sequence, subject_cpu: Sequence, body: fn(Sequence, Sequence) -> ()) -> (){
+    body(query_cpu, subject_cpu);
+}
+
+fn get_padding_h() -> Index {0}
+fn get_padding_w() -> Index {0}
+
+static read_matrix = read_matrix_cpu;
+static write_matrix = write_matrix_cpu;
+static read_matrix_s = read_matrix_s_cpu;
+static write_matrix_s = write_matrix_s_cpu;
+static read_vector = read_vector_cpu;
+static write_vector = write_vector_cpu;
+static read_sequence = read_sequence_cpu;
+static write_sequence = write_sequence_cpu;
+
+fn make_matrix_acc_cpu(matrix: Matrix) -> MatrixAcc{
+    make_matrix_acc(matrix, read_matrix_cpu(matrix), write_matrix_cpu(matrix))
+}
+
+fn make_matrix_acc(matrix: Matrix, read: ReadMatrixFn, write: WriteMatrixFn) -> MatrixAcc{
+    make_matrix_acc_offset(matrix, read, write, 0, 0)
+}
+
+fn make_matrix_acc_offset(matrix: Matrix, read: ReadMatrixFn, write: WriteMatrixFn, offset_i: Index, offset_j: Index) -> MatrixAcc{
+    make_matrix_acc_std_offset(matrix, read, write, offset_i, offset_j) 
+}
+
+fn get_matrix_s_acc_cpu(matrix: MatrixS) -> MatrixSAcc{
+    get_matrix_s_acc(matrix, read_matrix_s_cpu(matrix), write_matrix_s_cpu(matrix))
+}
+
+fn get_matrix_s_acc(matrix: MatrixS, read: ReadMatrixSFn, write: WriteMatrixSFn) -> MatrixSAcc{
+    get_matrix_s_acc_offset(matrix, read, write, 0, 0)
+}
+
+fn get_matrix_s_acc_offset(matrix: MatrixS, read: ReadMatrixSFn, write: WriteMatrixSFn, offset_i: Index, offset_j: Index) -> MatrixSAcc{
+    get_matrix_s_acc_std_offset(matrix, read, write, offset_i, offset_j) 
+}
+
+fn alloc_device(size: Index) -> Buffer{
+    alloc_cpu(size)
+}
+
+fn release_dev(buf: Buffer) -> () {}
+
+fn get_matrix_entry_cpu(device_matrix: Matrix, i: Index, j: Index) -> MatrixElem{
+    make_matrix_acc_cpu(device_matrix).read(i, j)
+}
+
+fn get_vector_entry_cpu(device_vector: Vector, i: Index) -> MatrixElem{
+    get_vector_acc_cpu(device_vector).read(i)
+}
+
+fn get_matrix_s_cpu(device_matrix: MatrixS) -> MatrixS { device_matrix }
+fn get_vector_cpu(device_vector: Vector) -> Vector { device_vector }
+fn get_sequence_cpu(device_sequence: Sequence) -> Sequence { device_sequence }
+
+fn vector_to_device(vector_cpu: Vector, device_vector: Vector) -> () {}
+fn sequence_to_device(sequence_cpu: Sequence, pad: Index) -> Sequence { sequence_cpu }
+
+fn get_traceback_acc(block_width: Index, predc: MatrixS, scheme: AlignmentScheme) -> fn(Index, Index, Index, Index, IterationInfo) -> PredecessorMatrixAcc{
+    |offset_i, offset_j, height, width, it| -> PredecessorMatrixAcc{
+
+        let predc_offset_i = offset_i + it.block_id;
+        let pre_acc = get_matrix_s_acc_offset(predc, read_matrix_s(predc), write_matrix_s(predc), predc_offset_i, 0);
+
+        for i in range(-1, width){
+            pre_acc.write(-1, i, scheme.init_predc_cols(i));
+        }
+        for i in range(0, height){
+            pre_acc.write(i, -1, scheme.init_predc_rows(i));
+        }
+
+        PredecessorMatrixAcc{
+            write:     |i, j, val| pre_acc.write(i, j, val),
+        }
+    }
+}
+
