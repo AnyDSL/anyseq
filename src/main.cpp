@@ -26,7 +26,7 @@ void benchmark_align(const std::string& name,
                std::string& alq, std::string& als,
                std::ostream& os)
 {
-    os << "testing " << name << ": " << std::flush;
+    os << "testing " << name << std::flush;
 
     am::timer time;
     time.start();
@@ -35,7 +35,7 @@ void benchmark_align(const std::string& name,
                                 &alq.front(), &als.front());
     time.stop();
 
-    os << time.milliseconds() << " ms" << std::endl;
+    os << " " << time.milliseconds() << " ms" << std::endl;
 }
 
 
@@ -46,14 +46,14 @@ void benchmark_score(const std::string& name,
                const std::string& q, const std::string& s,
                std::ostream& os)
 {
-    os << "testing " << name << ": " << std::flush;
+    os << "testing " << name << std::flush;
 
     am::timer time;
     time.start();
     volatile auto score = align(q.c_str(), q.size(), s.c_str(), s.size());
     time.stop();
 
-    os << time.milliseconds() << " ms" << std::endl;
+    os << " " << time.milliseconds() << " ms" << std::endl;
 }
 
 //-------------------------------------------------------------------
@@ -125,6 +125,7 @@ int main(int argc, char* argv[])
 {
     using namespace clipp;
     using std::cout;
+    using std::endl;
 
     enum class imode { file, args, stdio, random };
     enum class omode { file, stdio };
@@ -175,15 +176,16 @@ int main(int argc, char* argv[])
     switch(input) {
         default:
         case imode::file:
+            cout << "input sequences: " << query << ", " << subject << endl;
             try {
                 //only use first sequence from each input files 
                 auto qreader = make_sequence_reader(query);
-                auto sreader = make_sequence_reader(subject);
                 if(qreader->has_next()) {
                     query = std::move(qreader->next().data);
                 }
+                auto sreader = make_sequence_reader(subject);
                 if(sreader->has_next()) {
-                    subject = std::move(qreader->next().data);
+                    subject = std::move(sreader->next().data);
                 }
             } 
             catch(std::exception& e) {
@@ -197,7 +199,7 @@ int main(int argc, char* argv[])
             break;
         case imode::random: {
             if(minlen < 1 || maxlen < 1) {
-                std::cerr << "String lenghts must be greater than zero!" << std::endl;
+                std::cerr << "String lenghts must be greater than zero!" << endl;
                 return 1;
             }
             if(maxlen < minlen) std::swap(minlen,maxlen);
@@ -209,6 +211,8 @@ int main(int argc, char* argv[])
         }
     }
 
+    cout << "sequence lengths: " << query.size() << ", " << subject.size() << endl;
+
     switch(output) {
         default:
         case omode::stdio:             
@@ -216,14 +220,14 @@ int main(int argc, char* argv[])
             break;
         case omode::file: {
             if(outfile.empty()) {
-                std::cerr << "No output file name given!" << std::endl;
+                std::cerr << "No output file name given!" << endl;
                 return 1;
             }
             std::ofstream os{outfile};
             if(os.good()) {
                 benchmark_alignments(query, subject, os);
             } else {
-                std::cerr << "Unable to open output file!" << std::endl;
+                std::cerr << "Unable to open output file!" << endl;
                 return 1;
             }
         }

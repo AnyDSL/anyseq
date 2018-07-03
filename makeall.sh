@@ -19,10 +19,10 @@ cmake .. -DAnyDSL_runtime_DIR:PATH=$runtime -DBACKEND=cpu
 make -j $threads
 cd ..
 
-rm -rf build_gpu
-mkdir build_gpu
-cd build_gpu
-cmake .. -DAnyDSL_runtime_DIR:PATH=$runtime -DBACKEND=cuda
-make -j $threads
-cd ..
+# rm -rf build_gpu
+# mkdir build_gpu
+# cd build_gpu
+# cmake .. -DAnyDSL_runtime_DIR:PATH=$runtime -DBACKEND=cuda
+# make -j $threads
+# cd ..
 
