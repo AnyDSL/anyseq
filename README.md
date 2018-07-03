@@ -30,8 +30,8 @@ If all went well you should now have two different executables for CPU and GPU.
 
 #### Demo Benchmarks
 
-The 'bechmark.sh' script will align two bacterial genomes and 2 random
-sequences with different alignment schemes for the CPU and the GPU version.
+The 'bechmark.sh' script will align several genomic sequences with different 
+alignment schemes for the CPU and the GPU version.
 
 
 #### Demo Program Usage

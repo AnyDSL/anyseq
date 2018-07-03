@@ -1,7 +1,6 @@
 cmake_minimum_required(VERSION 3.7 FATAL_ERROR)
 
-
-project(AnyAlign)
+project(AnySeq)
 
 find_package(AnyDSL_runtime REQUIRED)
 include_directories(${AnyDSL_runtime_INCLUDE_DIRS})
