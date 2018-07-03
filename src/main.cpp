@@ -35,7 +35,9 @@ void benchmark_align(const std::string& name,
                                 &alq.front(), &als.front());
     time.stop();
 
-    os << " " << time.milliseconds() << " ms" << std::endl;
+    auto gcups = 1e-9*((q.size()*s.size()) / time.seconds());
+    os << " " << time.milliseconds() << " ms;  "
+       << gcups << " GCUPS" << std::endl;
 }
 
 
@@ -53,7 +55,9 @@ void benchmark_score(const std::string& name,
     volatile auto score = align(q.c_str(), q.size(), s.c_str(), s.size());
     time.stop();
 
-    os << " " << time.milliseconds() << " ms" << std::endl;
+    auto gcups = 1e-9*((q.size()*s.size()) / time.seconds());
+    os << " " << time.milliseconds() << " ms;  "
+       << gcups << " GCUPS" << std::endl;
 }
 
 //-------------------------------------------------------------------

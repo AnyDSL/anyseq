@@ -1,4 +1,4 @@
-build_*
+build*
 *.o
 *.ll
 
