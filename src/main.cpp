@@ -20,58 +20,55 @@ using namespace anyseq;
 
 //-------------------------------------------------------------------
 template<class Function>
-void benchmark_align(const std::string& name,
+double benchmark_align(const std::string& name,
                Function&& align, 
                const std::string& q, const std::string& s,
                std::string& alq, std::string& als,
                std::ostream& os)
 {
-    os << "testing " << name << std::flush;
-
     am::timer time;
     time.start();
     volatile auto score = align(q.c_str(), q.size(),
                                 s.c_str(), s.size(),
                                 &alq.front(), &als.front());
     time.stop();
-
-    auto gcups = ((q.size()+s.size()) / time.seconds())/1000000;
-    os << " " << time.milliseconds() << " ms;  "
-       << gcups << " GCUPS" << std::endl;
+    return ((q.size()+s.size()) / time.seconds())/1000000;
 }
 
 
 //-------------------------------------------------------------------
 template<class Function>
-void benchmark_score(const std::string& name,
+double benchmark_score(const std::string& name,
                Function&& align, 
                const std::string& q, const std::string& s,
                std::ostream& os)
 {
-    os << "testing " << name << std::flush;
-
     am::timer time;
     time.start();
     volatile auto score = align(q.c_str(), q.size(), s.c_str(), s.size());
     time.stop();
-
-    auto gcups = ((q.size()+s.size()) / time.seconds())/1000000;
-    os << " " << time.milliseconds() << " ms;  "
-       << gcups << " GCUPS" << std::endl;
+    return ((q.size()+s.size()) / time.seconds())/1000000;
 }
 
 //-------------------------------------------------------------------
-void benchmark_alignments(const std::string& q, const std::string& s,
-                          std::ostream& os)
+void benchmark_alignments(std::string q, std::string s, std::ostream& os)
 {
-    benchmark_score("global score", 
-        global_alignment_score, q, s, os);
+    os << "testing alignments..." << std::endl;
+    q.resize(10*q.size(), 'A');
+    s.resize(10*s.size(), 'A');
+    std::vector<double> gcups;
 
-    benchmark_score("semiglobal score",
-        semiglobal_alignment_score, q, s, os);
-
-    benchmark_score("local score",
-        local_alignment_score, q, s, os);
+    // gcups.push_back(
+    //     benchmark_score("global score", 
+    //         global_alignment_score, q, s, os));
+    //
+    // gcups.push_back(
+    //     benchmark_score("semiglobal score",
+    //         semiglobal_alignment_score, q, s, os));
+    //
+    // gcups.push_back(
+    //     benchmark_score("local score",
+    //         local_alignment_score, q, s, os));
 
 
     const auto alen = q.size() + s.size();
@@ -79,15 +76,23 @@ void benchmark_alignments(const std::string& q, const std::string& s,
     std::string alq; alq.resize(alen, ' ');
     std::string als; als.resize(alen, ' ');
 
-    benchmark_align("global alignment", 
-        construct_global_alignment, q, s, alq, als, os);
+    gcups.push_back(
+        benchmark_align("global alignment", 
+            construct_global_alignment, q, s, alq, als, os));
 
-    benchmark_align("semiglobal alignment",
-    construct_semiglobal_alignment, q, s, alq, als, os);
+    gcups.push_back(
+        benchmark_align("semiglobal alignment",
+        construct_semiglobal_alignment, q, s, alq, als, os));
 
-    benchmark_align("local alignment",
-        construct_local_alignment, q, s, alq, als, os);
+    gcups.push_back(
+        benchmark_align("local alignment",
+            construct_local_alignment, q, s, alq, als, os));
+
+    std::sort(gcups.begin(), gcups.end());
+
+    os << "Median: " << gcups[gcups.size()/2] << " GCUPS" << std::endl;
 }
+
 
 
 //-------------------------------------------------------------------
@@ -185,11 +190,11 @@ int main(int argc, char* argv[])
                 //only use first sequence from each input files 
                 auto qreader = make_sequence_reader(query);
                 while(qreader->has_next()) {
-                    query += std::move(qreader->next().data);
+                    query += qreader->next().data;
                 }
                 auto sreader = make_sequence_reader(subject);
                 while(sreader->has_next()) {
-                    subject += std::move(sreader->next().data);
+                    subject += sreader->next().data;
                 }
             } 
             catch(std::exception& e) {
@@ -215,7 +220,7 @@ int main(int argc, char* argv[])
         }
     }
 
-    cout << "sequence lengths: " << query.size() << ", " << subject.size() << endl;
+    // cout << "sequence lengths: " << query.size() << ", " << subject.size() << endl;
 
     switch(output) {
         default:
