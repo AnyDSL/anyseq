@@ -184,12 +184,12 @@ int main(int argc, char* argv[])
             try {
                 //only use first sequence from each input files 
                 auto qreader = make_sequence_reader(query);
-                if(qreader->has_next()) {
-                    query = std::move(qreader->next().data);
+                while(qreader->has_next()) {
+                    query += std::move(qreader->next().data);
                 }
                 auto sreader = make_sequence_reader(subject);
-                if(sreader->has_next()) {
-                    subject = std::move(sreader->next().data);
+                while(sreader->has_next()) {
+                    subject += std::move(sreader->next().data);
                 }
             } 
             catch(std::exception& e) {
