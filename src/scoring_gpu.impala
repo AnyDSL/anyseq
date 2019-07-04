@@ -1,0 +1,201 @@
+//-----------------------------------------------------------------------------
+fn linmem_iter_view_device(col: Vector, row: Vector, corners: Vector) 
+    -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView
+{
+    |offset_i, offset_j, height, width, _, it| -> ScoresView{
+
+        let tid = it.tid_x;
+        let block_j = offset_j / BLOCK_WIDTH;
+       
+        let lines = reserve_shared[Score]((BLOCK_WIDTH + 1) * 3);
+        
+        let linv = rotation_view(read_matrix8_shared(lines), write_matrix8_shared(lines), BLOCK_WIDTH);
+
+        let colv = view_vector_offset(read_vector(col), write_vector(col), offset_i);
+        let rowv = view_vector_offset(read_vector(row), write_vector(row), offset_j);
+        let corv = view_vector(read_vector(corners), write_vector(corners));
+
+        linv.write_lower(tid, rowv.read(tid));
+        linv.write_middle(tid,rowv.read(tid));
+        linv.write_upper(tid, rowv.read(tid));
+
+        if tid == 1 {
+            // write corner value to position -1
+            linv.write_middle(-1, corv.read(block_j - 1));
+            // update corner value
+            corv.write(block_j - 1, colv.read(BLOCK_HEIGHT - 1));
+        }
+
+        ScoresView {
+            read_no_gap: |_, j| linv.read_middle(j - 1),
+            read_gap_q:  |_, j| linv.read_lower(j - 1),
+            read_gap_s:  |_, j| linv.read_lower(j),
+            write:       |i, j, score| {
+                linv.write_upper(j, score);
+                if i == height - 1 { rowv.write(j, score); }
+                if j == width - 1 { colv.write(i, score); }
+
+            },
+            update_begin_line: |i| {
+                if tid == 0 && i < BLOCK_HEIGHT { linv.write_lower(-1, colv.read(i)); }
+            },
+            update_end_line: |_| {
+                linv.rotate(); 
+            },
+            block_end: || {}
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn local_linmem_iter_view_device(score_matrix: Scores, 
+                                      max_scores: Vector, 
+                                      max_pos_i: Vector, max_pos_j: Vector) 
+    -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView
+{
+    |offset_i, offset_j, height, width, is_left_half, it| {
+        
+        let mat = score_matrix.iter_view(offset_i, offset_j, 
+                                              height, width, 
+                                              is_left_half, it);
+
+        let mut max_score_thread = SCORE_MIN_VALUE;
+        let mut max_pos_thread   = (0, 0);
+
+        let write = |i, j, score| {
+            mat.write(i, j, score);
+            if i < height && score > max_score_thread {
+                max_score_thread = score;
+                max_pos_thread = (i, j);
+            }
+        };
+    
+        let block_end = || {
+        
+            mat.block_end();
+
+            let max_score = view_vector(read_vector(max_scores), write_vector(max_scores));
+            let max_pos_i = view_vector(read_vector(max_pos_i),  write_vector(max_pos_i) );
+            let max_pos_j = view_vector(read_vector(max_pos_j),  write_vector(max_pos_j) );
+
+            let index = offset_j + it.tid_x;
+            
+            let prev_max = max_score.read(index);
+            
+            if max_score_thread > prev_max {
+                max_score.write(index, max_score_thread);
+                max_pos_i.write(index, max_pos_thread(0) + offset_i);
+                max_pos_j.write(index, max_pos_thread(1) + offset_j);
+            }
+        };
+
+        ScoresView {
+            read_no_gap:       mat.read_no_gap,
+            read_gap_q:        mat.read_gap_q,
+            read_gap_s:        mat.read_gap_s,
+            write:             write,
+            update_begin_line: mat.update_begin_line,
+            update_end_line:   mat.update_end_line,
+            block_end:         block_end
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iter_view_hb_device(col_left: Vector, col_right: Vector, 
+                            row: Vector, corners: Vector, block_width: Index) 
+    -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView
+{
+    |offset_i, offset_j, height, width, is_left_half, it| -> ScoresView {
+
+        let tid = it.tid_x;
+        let block_j = offset_j / block_width;
+
+        let col = if is_left_half { col_left } else { col_right };    
+       
+        let lines = reserve_shared[Score]((BLOCK_WIDTH + 1) * 3);
+        
+        let linv = rotation_view(read_matrix8_shared(lines), write_matrix8_shared(lines), BLOCK_WIDTH);
+
+        let colv = view_vector_offset(read_vector(col), write_vector(col), offset_i);
+        let rowv = view_vector_offset(read_vector(row), write_vector(row), offset_j);
+        let corv = view_vector(read_vector(corners), write_vector(corners));
+        linv.write_lower(tid, rowv.read(tid));
+        
+        linv.write_middle(tid,rowv.read(tid));
+        linv.write_upper(tid, rowv.read(tid));
+
+        if tid == 1 {
+            // write corner value to position -1
+            linv.write_middle(-1, corv.read(block_j - 1));
+            // update corner value
+            corv.write(block_j - 1, colv.read(BLOCK_HEIGHT - 1));
+        }
+
+        ScoresView {
+            read_no_gap: |_, j| linv.read_middle(j - 1),
+            read_gap_q:  |_, j| linv.read_lower(j - 1),
+            read_gap_s:  |_, j| linv.read_lower(j),
+            write:       |i, j, score| {
+                linv.write_upper(j, score);
+                if i == height - 1 { rowv.write(j, score); }
+                if j == width - 1 { colv.write(i, score); }
+
+            },
+            update_begin_line: |i| {
+                if tid == 0 && i < BLOCK_HEIGHT { linv.write_lower(-1, colv.read(i)); }
+            },
+            update_end_line: |_| {
+                linv.rotate(); 
+            },
+            block_end: || {}
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iter_view_tb_device(block_width: Index, init_scores: InitScoresFn) 
+    -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView
+{
+    |offset_i, offset_j, height, width, is_left_half, it| -> ScoresView {
+
+        let tid = it.tid_x;     
+       
+        let lines = reserve_shared[Score]((BLOCK_WIDTH + 1) * 3);
+        
+        let linv = rotation_view(read_matrix8_shared(lines), 
+                                 write_matrix8_shared(lines), block_width);
+
+        linv.write_lower(tid, init_scores(tid));
+        linv.write_middle(tid, init_scores(tid));
+        linv.write_upper(tid, init_scores(tid));
+
+        if tid == 1 {
+            linv.write_middle(-1, init_scores(-1));
+        }
+
+        ScoresView {
+            read_no_gap: |_, j| linv.read_middle(j - 1),
+            read_gap_q:  |_, j| linv.read_lower(j - 1),
+            read_gap_s:  |_, j| linv.read_lower(j),
+            write:       |i, j, score| linv.write_upper(j, score),
+
+            update_begin_line: |i| {
+                if tid == 0 && i < height { linv.write_lower(-1, init_scores(i)); }
+            },
+            update_end_line: |_| {
+                linv.rotate(); 
+            },
+            block_end: || {}
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn local_max_vector_size_device(matrix_width: Index) -> Index { 
+    matrix_width 
+}

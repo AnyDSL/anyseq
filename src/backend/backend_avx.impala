@@ -9,7 +9,6 @@ fn @is_avx() -> bool { true }
 fn @is_avx2() -> bool { false }
 
 fn @get_vector_length() -> i32 { 8 }
-fn @get_alignment() -> i32 { 32 }
 fn @get_thread_count() -> i32 { 4 }
 
 // amount of full vector iterations that trigger loop vectorization
@@ -34,8 +33,8 @@ fn @inner_loop(lower: i32, upper: i32, body: fn(i32) -> ()) -> () {
         let remainder_start = round_up(upper - get_vector_length() + 1, get_vector_length());
 
         range(lower, peel_end, body);
-        for i in vectorize(get_vector_length(), get_alignment(), peel_end, remainder_start) {
-            @@body(i);
+        for i in range_step(peel_end, remainder_start, get_vector_length()) {
+            vectorize(get_vector_length(), |j| @@body(i + j))
         }
         range(remainder_start, upper, body);
     }
@@ -48,8 +47,8 @@ fn @inner_loop_step(lower: i32, upper: i32, step: i32, body: fn(i32) -> ()) -> (
         let iter_vec = (upper - lower) / (step * get_vector_length());
         let remainder_start = lower + iter_vec * get_vector_length() * step;
 
-        for i in vectorize(get_vector_length(), 4, 0, iter_vec * get_vector_length()) {
-            @@body(i * step + lower);
+        for i in range_step(0, iter_vec * get_vector_length(), get_vector_length()) {
+            vectorize(get_vector_length(), |j| @@body((i + j) * get_vector_length() + lower))
         }
         range_step(remainder_start, upper, step, body);
     }

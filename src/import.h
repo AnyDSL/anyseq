@@ -3,7 +3,7 @@
 
 #include <vector>
 
-#include "datatypes.h"
+#include "config.h"
 
 
 extern "C" { 

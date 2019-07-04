@@ -1,0 +1,446 @@
+//-----------------------------------------------------------------------------
+struct IterContext {
+    block_idx: IndexPair
+}
+
+fn iter_context(idx: IndexPair) -> IterContext {
+    IterContext {
+        block_idx: idx,
+    }
+}
+
+
+//----------------------------------------------------------------------------
+fn iteration(
+    query: Sequence, subject: Sequence, 
+    scores: Scores, predc: Predecessors, 
+    body: RelaxationBody) -> ()
+{
+    let batch_size = get_vector_length();
+
+    let first = (0, 0);
+    let last  = (query.length, subject.length);
+
+    let nblocks = num_blocks(last, BLOCK_DIM);
+
+    let linit  = ( min(BLOCK_DIM(0) * (batch_size-1), query.length),
+                   min(BLOCK_DIM(1) * (batch_size-1), subject.length) );
+
+    initialize_queue(batch_size, nblocks(0), nblocks(1));
+
+    for benchmark_cpu() {
+
+        iteration_initial(query, subject, scores, predc,
+                          first, linit,
+                          body);
+
+        for bidx, start, size 
+            in index_blocks_in_diagonal(batch_size, first, last, BLOCK_DIM, 
+                                        sequential_schedule)
+        {
+            enqueue_single( iter_block(bidx, start, size) );
+        }
+        
+        let n = get_thread_count();
+        for i in parallel(n, 0i32, n) {
+
+            let batch = block_batch(batch_size);
+
+            while all_complete() != 0 {
+                wait_until_batch_ready();
+
+                if try_dequeue_batch(batch) {
+                    iteration_block_batch(query, subject, scores, predc,
+                                          batch, body);
+                }
+            }
+            batch.release();
+        }
+
+        finalize_queue();
+
+    }
+}
+
+
+//----------------------------------------------------------------------------
+fn iteration_block_batch(
+    query: Sequence, subject: Sequence, 
+    scores: Scores, predc: Predecessors, 
+    batch: BlockBatch,
+    body: RelaxationBody) -> ()
+{
+    let mut qry: [SequenceView * 16]; 
+    let mut sub: [SequenceView * 16];
+    let mut sco: [ScoresView * 16];
+    let mut pre: [PredecessorsView * 16];
+
+    let last = (query.length, subject.length);
+
+    for b in range(0 as Index, batch.size()) {
+        let block = batch.get(b);
+        let bidx = (block.idx0, block.idx1);
+
+        qry(b) = view_sequence_offset(read_sequence_cpu(query), 
+                                      write_sequence_cpu(query), 
+                                      block.start0);
+
+        sub(b) = view_sequence_offset(read_sequence_cpu(subject), 
+                                      write_sequence_cpu(subject), 
+                                      block.start1);
+
+        sco(b) = scores.iter_view(block.start0, block.start1, 
+                                  block.size0, block.size1, false, 
+                                  iter_context(bidx));
+
+        pre(b) = predc.iter_view(block.start0, block.start1, 
+                                 block.size0, block.size1, 
+                                 iter_context(bidx));
+    }
+
+    vectorize(get_vector_length(), |b| {
+        let block = batch.get(b);
+        let size = (block.size0, block.size1);
+
+        for i, j in inter_block_loop(sco(b), size) {
+            body(i, j, qry(b), sub(b), sco(b), pre(b));
+        }
+    });
+
+    for b in range(0 as Index, batch.size()) {
+        let block = batch.get(b);
+        let bidx  = (block.idx0, block.idx1);
+        let start = (block.start0, block.start1);
+        let size  = (block.size0, block.size1);
+
+        mark_complete(bidx(0), bidx(1));
+
+        let needs_right = start(0) + size(0) < last(0);
+        let needs_below = start(1) + size(1) < last(1);
+
+        let cright = needs_right && (bidx(1) < 1 || (
+            is_untouched(bidx(0) + 1, bidx(1)    ) == 0 &&
+            is_complete (bidx(0)    , bidx(1) - 1) == 1 &&
+            is_complete (bidx(0) + 1, bidx(1) - 1) == 1 ) );
+
+        let cbelow = needs_below && (bidx(0) < 1 || (
+            is_untouched(bidx(0) + 1, bidx(1) + 1) == 0 &&
+            is_complete (bidx(0) - 1, bidx(1)    ) == 1 &&
+            is_complete (bidx(0) - 1, bidx(1) + 1) == 1 ) );
+
+        let cdiag = needs_right && needs_below && (
+            is_untouched(bidx(0) + 1, bidx(1) + 1) == 0 &&
+            is_complete (bidx(0)    , bidx(1) + 1) == 1 &&
+            is_complete (bidx(0) + 1, bidx(1)    ) == 1 );
+
+        if cright { 
+            let nbidx  = (bidx(0) + 1, bidx(1));
+            let nstart = (start(0) + size(0), start(1));
+            let nsize  = bounded_block_size(nstart, size, last);
+            enqueue_single( iter_block(nbidx, nstart, nsize) ); 
+        }
+        if cbelow {
+            let nbidx  = (bidx(0), bidx(1) + 1);
+            let nstart = (start(0), start(1) + size(1));
+            let nsize  = bounded_block_size(nstart, size, last);
+            enqueue_single( iter_block(nbidx, nstart, nsize) ); 
+        }
+        if cdiag { 
+            let nbidx  = (bidx(0) + 1, bidx(1) + 1);
+            let nstart = (start(0) + size(0), start(1) + size(1));
+            let nsize  = bounded_block_size(nstart, size, last);
+            enqueue_single( iter_block(nbidx, nstart, nsize) ); 
+        }
+
+    }
+
+}
+
+
+//----------------------------------------------------------------------------
+fn iteration_initial(
+    query: Sequence, subject: Sequence, 
+    scores: Scores, predc: Predecessors, 
+    first: IndexPair, last: IndexPair,
+    body: RelaxationBody) -> ()
+{
+    for benchmark_cpu() {
+
+        for bidx, start, size 
+            in diagonal_index_block_triangle(first, last, BLOCK_DIM, 
+                                             parallel_schedule)
+        {
+            let qry = view_sequence_offset(read_sequence_cpu(query), 
+                                           write_sequence_cpu(query), 
+                                           start(0));
+
+            let sub = view_sequence_offset(read_sequence_cpu(subject), 
+                                           write_sequence_cpu(subject), 
+                                           start(1));
+
+            let sco = scores.iter_view(start(0), start(1), 
+                                       size(0), size(1), false, 
+                                       iter_context(bidx));
+
+            let pre = predc.iter_view(start(0), start(1), 
+                                      size(0), size(1), 
+                                      iter_context(bidx));
+    
+            for i, j in inter_block_loop(sco, size) {
+                body(i, j, qry, sub, sco, pre);
+            }
+
+        }
+
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_blockwise(block_width: Index, splits: Splits) -> IterationFn {
+
+    |query, subject, scores, predc, body| {
+
+        let first    = (0, 0);
+        let last     = (0, subject.length);
+        let blockdim = (1, block_width);
+
+        for benchmark_cpu() {
+
+            for bidx, start, size 
+                in regular_index_blocks(first, last, blockdim, parallel_schedule)
+            {
+                let (_,start1) = start;
+                let (_,width)  = size;
+                let (start0, height) = splits.part_dimensions(bidx(1));
+
+                let qry = view_sequence_offset(read_sequence_cpu(query), 
+                                               write_sequence_cpu(query), 
+                                               start0);
+
+                let sub = view_sequence_offset(read_sequence_cpu(subject), 
+                                               write_sequence_cpu(subject), 
+                                               start1);
+
+                let sco = scores.iter_view(start0, start1, 
+                                           height, width, false, 
+                                           iter_context(bidx));
+
+                let pre = predc.iter_view(start0, start1, 
+                                          height, width, 
+                                          iter_context(bidx));
+
+                for i, j in inter_block_loop(sco, (height, width)) {
+                    body(i, j, qry, sub, sco, pre);
+                }
+            }
+
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_partitioned(
+    half_size: Index, num_halfs: Index, 
+    block_width: Index, 
+    splits: Splits, max_part_height: Index) -> IterationFn
+{
+    
+    |query, subject, scores, predc, body| {
+
+        // horizontal blocks in each half
+        let half_num0 = half_size / block_width;
+        // vertical blocks in each half
+        let half_num1 = ceil_div(max_part_height, BLOCK_HEIGHT);
+        // maximum blocks in one antidiagonal of a half
+        let half_max_blocks = min(half_num1, half_num0);
+        // number of antidiagonals in a half
+        let diags = half_num1 + half_num0 - 1;
+
+        for benchmark_cpu() {
+            for dia0 in unroll(0, diags) {
+
+                let half_num_blocks = min3(dia0 + 1, half_max_blocks, diags - dia0);
+
+                for dia1 in parallel_schedule(half_num_blocks * num_halfs) {
+                
+                    let half_idx = dia1 / half_num_blocks;
+                    let is_left_half = half_idx % 2 == 0;
+
+                    let half_dia1 = dia1 % half_num_blocks;
+                    let half_block0 = min(dia0, half_num1 - 1) - half_dia1;
+                    let half_block1 = max(dia0 - half_num1 + 1, 0) + half_dia1;
+                
+                    let half_start1 = half_idx * half_size;
+                    let (half_start0, half_height) = splits.part_dimensions(half_idx / 2);
+
+                    let start0 = half_start0 + half_block0 * BLOCK_HEIGHT;
+                    let start1 = half_start1 + half_block1 * block_width;
+
+                    let half_width = min(half_size, subject.length - half_start1);
+
+                    let height = min(BLOCK_HEIGHT, half_height - half_block0 * BLOCK_HEIGHT);
+                    let width  = min(block_width, subject.length - start1);
+
+                    let qry = view_sequence_half(query, 
+                                                 half_start0, half_height, 
+                                                 half_block0, BLOCK_HEIGHT, 
+                                                 is_left_half);
+
+                    let sub = view_sequence_half(subject, 
+                                                 half_start1, half_width, 
+                                                 half_block1, block_width, 
+                                                 is_left_half);
+
+                    if width > 0 {
+                        let sco = scores.iter_view(start0, start1, 
+                                                   height, width, 
+                                                   is_left_half, 
+                                                   iter_context((dia0,dia1)));
+
+                        let pre = predc.iter_view(start0, start1, 
+                                                  height, width, 
+                                                  iter_context((dia0,dia1)));
+
+                        for i, j in inter_block_loop(sco, (height, width)) {
+                            body(i, j, qry, sub, sco, pre);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_traceback(
+    predc: Matrix8, splits: Splits,
+    subject_length: Index, block_width: Index, 
+    body: fn (Matrix8View, Index, Index, Index, Index) -> ()) -> ()
+{
+
+    for block in parallel_schedule(splits.get().length) {
+        
+        let (start0, height) = splits.part_dimensions(block);
+
+        let start1 = block * block_width;
+        let width = min(block_width, subject_length - start1);
+
+        let predc_start0 = start0 + block;
+
+        let pre = view_matrix8_offset(predc, 
+                                      read_matrix8_cpu(predc), 
+                                      write_matrix8_cpu(predc), 
+                                      predc_start0, 0);
+
+        body(pre, start0, start1, height, width);
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_1d(length: Index, body: fn(Index) -> ()) -> () {
+    for i in parallel_schedule(length) {
+        body(i);
+    }
+}
+
+
+fn iteration_matrix_1d(matrix: Matrix, length: Index, 
+                       body: fn(Index, MatrixView) -> ()) -> ()
+{
+    let mat = view_matrix_cpu(matrix);
+    for i in iteration_1d(length) { body(i, mat); }
+}
+
+
+fn iteration_matrix16_1d(matrix: Matrix16, length: Index, 
+                         body: fn(Index, Matrix16View) -> ()) -> ()
+{
+    let mat = view_matrix16_cpu(matrix);
+    for i in iteration_1d(length) { body(i, mat); }
+}
+
+
+fn iteration_matrix8_1d(matrix: Matrix8, length: Index, 
+                        body: fn(Index, Matrix8View) -> ()) -> ()
+{
+    let mat = view_matrix8_cpu(matrix);
+    for i in iteration_1d(length) { body(i, mat); }
+}
+
+
+fn iteration_vector_1d(vector: Vector, length: Index, 
+                       body: fn(Index, VectorView) -> ()) -> ()
+{
+    let vec = view_vector_cpu(vector);
+    for i in iteration_1d(length){ body(i, vec); }
+}
+    
+
+fn iteration_2_vectors_1d(v1: Vector, v2: Vector, length: Index, 
+                          body: fn(Index, VectorView, VectorView) -> ()) -> ()
+{
+    let v1view = view_vector_cpu(v1);
+    let v2view = view_vector_cpu(v2);
+    for i in iteration_1d(length) { body(i, v1view, v2view); }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_reduction(
+    vector: Vector, 
+    index_vec: Vector, score_vec: Vector, 
+    offset: Index, length: Index, 
+    body: fn(Score, Score) -> bool) -> ()
+{
+    let num_blocks = 64;
+    let block_size = ceil_div(length, num_blocks);
+    let vec = view_vector_cpu(vector);
+    
+    let partial_res = create_vector(num_blocks, 0, alloc_cpu);
+    let partial_idx = create_vector(num_blocks, 0, alloc_cpu);
+    let par_res = view_vector_cpu(partial_res);
+    let par_idx = view_vector_cpu(partial_idx);
+
+    for b in parallel_schedule(num_blocks) {
+
+        let offs = offset + b * block_size;
+        let len  = min(block_size, length - b * block_size);
+
+        let mut score = SCORE_MIN_VALUE;
+        let mut index = -1;
+
+        // vectorized (see backend_avx)
+        for i in inner_loop(offs, offs + len) {
+            let v = vec.read(i);
+            if body(v, score) {
+                score = v;
+                index = i;
+            }
+        }
+        par_res.write(b, score);
+        par_idx.write(b, index);
+    }
+    
+    let mut score = par_res.read(0);
+    let mut index = par_idx.read(0);
+
+    for i in inner_loop(1, num_blocks) {
+        let v = par_res.read(i);
+        if body(v, score) {
+            score = v;
+            index = par_idx.read(i);
+        }
+    }
+
+    view_vector_cpu(score_vec).write(0, score);
+    view_vector_cpu(index_vec).write(0, index);
+
+    release(partial_res.buf);
+    release(partial_idx.buf);
+}
+
+

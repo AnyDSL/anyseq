@@ -8,14 +8,50 @@
 #include <algorithm>
 #include <random>
 
-#include "import.h"         //AnySeq C interface
-#include "alignment_io.h"
-#include "sequence_io.h"
-#include "timer.h"  
-#include "clipp.h"          //command line args handling
+#include "import.h"        // AnySeq C interface
+#include "alignment_io.h"  // alignment result output
+#include "sequence_io.h"   // raw sequence input
+#include "timer.h"         // benchmarking timer
+#include "clipp.h"         // command line args handling
 
 
 using namespace anyseq;
+
+
+//-------------------------------------------------------------------
+class uniform_ACGT_distribution {
+public:
+    uniform_ACGT_distribution(): rndNum_{0,3} {}
+
+    template<class URNG>
+    char operator () (URNG& urng) {
+        switch(rndNum_(urng)) {
+            case 0: return 'A';
+            case 1: return 'C';
+            case 2: return 'G';
+            case 3: return 'T';
+            default: return '_';
+        }
+    }
+
+private:
+    std::uniform_int_distribution<char> rndNum_;
+};
+
+template<class URNG>
+std::string random_string(std::size_t minlen, std::size_t maxlen, URNG& urng)
+{
+    std::string s;
+    s.resize(std::uniform_int_distribution<std::size_t>{minlen,maxlen}(urng));
+
+    uniform_ACGT_distribution chars;
+    // auto chars = std::uniform_int_distribution<int>{65,66};
+    // auto chars = std::uniform_int_distribution<int>{65,67};
+    // auto chars = std::uniform_int_distribution<int>{65,122};
+    std::generate(begin(s), end(s), [&]{ return chars(urng); });
+
+    return s;
+}
 
 
 //-------------------------------------------------------------------
@@ -56,6 +92,7 @@ void benchmark_score(const std::string& name,
     os << " " << time.milliseconds() << " ms" << std::endl;
 }
 
+
 //-------------------------------------------------------------------
 void benchmark_alignments(const std::string& q, const std::string& s,
                           std::ostream& os)
@@ -83,40 +120,6 @@ void benchmark_alignments(const std::string& q, const std::string& s,
 
     benchmark_align("local alignment",
         construct_local_alignment, q, s, alq, als, os);
-}
-
-
-//-------------------------------------------------------------------
-class uniform_ACGT_distribution {
-public:
-    uniform_ACGT_distribution(): rndNum_{0,3} {}
-
-    template<class URNG>
-    char operator () (URNG& urng) {
-        switch(rndNum_(urng)) {
-            case 0: return 'A';
-            case 1: return 'C';
-            case 2: return 'G';
-            case 3: return 'T';
-            default: return '_';
-        }
-    }
-
-private:
-    std::uniform_int_distribution<char> rndNum_;
-};
-
-template<class URNG>
-std::string random_string(std::size_t minlen, std::size_t maxlen, URNG& urng)
-{
-    std::string s;
-    s.resize(std::uniform_int_distribution<std::size_t>{minlen,maxlen}(urng));
-
-    uniform_ACGT_distribution chars;
-    // auto distr = std::uniform_int_distribution<int>{65,122};
-    std::generate(begin(s), end(s), [&]{ return chars(urng); });
-
-    return s;
 }
 
 

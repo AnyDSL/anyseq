@@ -1,0 +1,126 @@
+//-----------------------------------------------------------------------------
+// sequence accessor 
+//-----------------------------------------------------------------------------
+type ReadSequenceFn  = fn(Index) -> Char;
+type WriteSequenceFn = fn(Index, Char) -> ();
+
+struct Sequence {
+    buf:        Buffer,
+    length:     Index,
+    mem_length: Index
+}
+
+struct SequenceView {
+    read:  fn(Index) -> Char,
+    write: fn(Index, Char) -> ()
+}
+
+
+//-------------------------------------------------------------------
+fn make_sequence(length: Index, mem_length: Index, buf: Buffer) -> Sequence
+{
+    Sequence {
+        buf:        buf,
+        length:     length,
+        mem_length: mem_length
+    }
+}
+
+
+//-------------------------------------------------------------------
+fn read_sequence_cpu(s: Sequence) -> ReadSequenceFn {
+    |idx| bitcast[&[Char]](s.buf.data)(idx) 
+}
+fn write_sequence_cpu(s: Sequence) -> WriteSequenceFn { 
+    |idx, val| bitcast[&mut[Char]](s.buf.data)(idx) = val
+}
+
+
+//-------------------------------------------------------------------
+fn alloc_sequence(s: Sequence, pad: Index, alloc: AllocFn) -> Sequence 
+{
+    let mem_length = s.length + pad;
+    make_sequence(s.length, mem_length, alloc(mem_length * sizeof[Char]()))
+}
+
+
+fn alloc_sequence_len_pad(length: Index, pad: Index, alloc: AllocFn) -> Sequence
+{
+    let mem_length = length + pad;
+    make_sequence(length, mem_length, alloc(mem_length * sizeof[Char]()))
+}
+
+
+//-------------------------------------------------------------------
+fn wrap_sequence(data: &[Char], length: Index) -> Sequence
+{
+    let buf = Buffer {
+        device: 0,
+        data: bitcast[&[i8]](data),
+        size: length as i64
+    };
+
+    make_sequence(length, length, buf)
+}
+
+
+//-------------------------------------------------------------------
+fn copy_sequence(src: Sequence, dst: Sequence) -> ()
+{
+    copy(src.buf, dst.buf);
+}
+
+
+
+//-------------------------------------------------------------------
+fn view_sequence_cpu(sequence: Sequence) -> SequenceView 
+{
+    view_sequence(read_sequence_cpu(sequence), write_sequence_cpu(sequence))
+}
+
+
+//-------------------------------------------------------------------
+fn view_sequence(read: ReadSequenceFn, write: WriteSequenceFn) -> SequenceView
+{
+    view_sequence_offset(read, write, 0)
+}
+
+
+//-------------------------------------------------------------------
+fn view_sequence_offset(read: ReadSequenceFn, write: WriteSequenceFn, 
+                        offset: Index) -> SequenceView
+{
+    SequenceView{
+        read:  |i|        read(i + offset),
+        write: |i, value| write(i + offset, value)
+    }
+}
+
+
+fn view_sequence_offset_reversed(read: ReadSequenceFn, write: WriteSequenceFn, 
+                                 offset: Index) -> SequenceView
+{
+    SequenceView{
+        read:  |i|        read(offset - i),
+        write: |i, value| write(offset - i, value)
+    }
+}
+
+
+//-------------------------------------------------------------------
+fn view_sequence_half(sequence: Sequence, 
+                      half_offset: Index, half_size: Index, 
+                      half_block: Index, block_size: Index, 
+                      is_left_half: bool) -> SequenceView 
+{
+    let offset = if is_left_half {
+        half_offset + half_block * block_size 
+    } else { 
+        half_offset + half_size - half_block * block_size - 1
+    };
+
+    if is_left_half{
+        return( view_sequence_offset(read_sequence(sequence), write_sequence(sequence), offset) )
+    }
+    view_sequence_offset_reversed(read_sequence(sequence), write_sequence(sequence), offset)
+}

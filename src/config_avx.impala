@@ -1,0 +1,58 @@
+//----------------------------------------------------------------------------
+// project-wide constants
+//----------------------------------------------------------------------------
+static BLOCK_WIDTH  = 1024;
+static BLOCK_HEIGHT = 1024;
+
+static BLOCK_DIM = (BLOCK_HEIGHT, BLOCK_WIDTH);
+
+
+//----------------------------------------------------------------------------
+/*
+extern "device" {
+    fn "llvm.x86.avx.movmsk.ps.256" movmskps256(simd[f32 * 8]) -> i32;
+    fn "llvm.x86.avx.cmp.ps.256" cmpps256(simd[f32 * 8], simd[f32 * 8], i8) -> simd[f32 * 8];
+    fn "llvm.x86.avx.rcp.ps.256" rcpps256(simd[f32 * 8]) -> simd[f32 * 8];
+    fn "llvm.x86.avx.blendv.ps.256" blendvps256(simd[f32 * 8], simd[f32 * 8], simd[f32 * 8]) -> simd[f32 * 8];
+}
+
+type Vf32 = simd[f32 * 8];
+
+// type Vi8  = simd[i8  * 32];
+// type Vi16 = simd[i16 * 16];
+type Vi32 = simd[i32 * 8];
+
+type Mask = simd[f32 * 8];
+
+fn @uniform_vf32(x: f32) -> Vf32 { simd[x, x, x, x, x, x, x, x] }
+
+// fn @uniform_vi16(x: i16) -> Vi32 { simd[x, x, x, x, x, x, x, x, x, x, x, x, x, x, x, x] }
+fn @uniform_vi32(x: i32) -> Vi32 { simd[x, x, x, x, x, x, x, x] }
+// fn @uniform_vi64(x: i64) -> Vi32 { simd[x, x, x, x] }
+
+// boolean operations on masks
+fn @any(m: Mask) -> bool { movmskps256(m) != 0 }
+fn @all(m: Mask) -> bool { movmskps256(m) == 0xFF }
+fn @and(a: Mask, b: Mask) -> Mask { bitcast[simd[f32 * 8]](bitcast[simd[i32 * 8]](a) & bitcast[simd[i32 * 8]](b)) }
+
+// comparison operations
+fn @greater_eq(a: Vi32, b: Vi32) -> Mask { cmpps256(bitcast[simd[f32 * 8]](b), bitcast[simd[f32 * 8]](a), 2i8) }
+fn @greater(a: Vi32, b: Vi32) -> Mask    { cmpps256(bitcast[simd[f32 * 8]](b), bitcast[simd[f32 * 8]](a), 1i8) }
+fn @not_eq(a: Vi32, b: Vi32) -> Mask     { cmpps256(bitcast[simd[f32 * 8]](b), bitcast[simd[f32 * 8]](a), 4i8) }
+
+// element selection
+fn @select_f32v(m: Mask, a: Vf32, b: Vf32) -> Vf32 { blendvps256(b, a, m) }
+fn @select_i32v(m: Mask, a: Vi32, b: Vi32) -> Vi32 { bitcast[simd[i32 * 8]](blendvps256(bitcast[simd[f32 * 8]](b), bitcast[simd[f32 * 8]](a), m)) }
+
+// absolute
+fn @abs_i32v(x: Vf32) -> Vf32 { bitcast[simd[i32 * 8]](bitcast[simd[i32 * 8]](x) & uniform_vi32(0x7FFFFFFF)) }
+fn @abs_f32v(x: Vf32) -> Vf32 { bitcast[simd[f32 * 8]](bitcast[simd[i32 * 8]](x) & uniform_vi32(0x7FFFFFFF)) }
+
+// integer min/max
+fn @min_i32v(a: Vi32, b: Vi32) -> Vi32 { bitcast[simd[i32 * 8]](select(bitcast[simd[i32 * 8]](a) < bitcast[simd[i32 * 8]](b), bitcast[simd[i32 * 8]](a), bitcast[simd[i32 * 8]](b))) }
+fn @max_i32v(a: Vi32, b: Vi32) -> Vi32 { bitcast[simd[i32 * 8]](select(bitcast[simd[i32 * 8]](a) > bitcast[simd[i32 * 8]](b), bitcast[simd[i32 * 8]](a), bitcast[simd[i32 * 8]](b))) }
+fn @minmin_i32v(a: Vi32, b: Vi32, c: Vi32) -> Vi32 { min_i32v(min_i32v(a, b), c) }
+fn @maxmax_i32v(a: Vi32, b: Vi32, c: Vi32) -> Vi32 { max_i32v(max_i32v(a, b), c) }
+fn @minmax_i32v(a: Vi32, b: Vi32, c: Vi32) -> Vi32 { max_i32v(min_i32v(a, b), c) }
+fn @maxmin_i32v(a: Vi32, b: Vi32, c: Vi32) -> Vi32 { min_i32v(max_i32v(a, b), c) }
+*/

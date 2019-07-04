@@ -4,6 +4,7 @@
 Proof-of-concept sequence alignment algorithms library implemented in [Impala](https://github.com/AnyDSL/impala).
 
 
+
 ### Setup Instructions
 
  -  Prerequisites:
@@ -15,23 +16,13 @@ Proof-of-concept sequence alignment algorithms library implemented in [Impala](h
    
 
  - Install [AnyDSL](https://github.com/AnyDSL/anydsl). In order to do so, run
-   the "install_anydsl.sh" script provided. This will download, configure & 
+   the "install\_anydsl.sh" script provided. This will download, configure & 
    compile AnyDSL which can take some time.
 
  - After you have a working AnyDSL installation you can run the AnySeq build script:
   ```
-  ./makeall.sh <absolute path to your AnyDSL installation>
+  ./makeall.sh
   ```
-
-If all went well you should now have two different executables for CPU and GPU.
-
-
-### Running 
-
-#### Demo Benchmarks
-
-The 'bechmark.sh' script will align two bacterial genomes and 2 random
-sequences with different alignment schemes for the CPU and the GPU version.
 
 
 #### Demo Program Usage

@@ -1,80 +1,301 @@
-static GAP_SYM   = '_';
-static EMPTY_SYM = ' ';
-
-
-struct TracebackModule{
-    traceback:             fn(MatrixS, (Index, Index)) -> (),
-    traceback_offset:      fn(MatrixSAcc, Index, Index, (Index, Index)) -> (),
-    get_alignment_query:   fn() -> Sequence,
-    get_alignment_subject: fn() -> Sequence,
-    get_alignment_start:   fn() -> (Index, Index)
+//-----------------------------------------------------------------------------
+struct TracebackModule {
+    traceback:         fn(Matrix8, IndexPair) -> (),
+    traceback_offset:  fn(Matrix8View, Index, Index, IndexPair) -> (),
+    alignment_query:   fn() -> Sequence,
+    alignment_subject: fn() -> Sequence,
+    alignment_start:   fn() -> IndexPair
 }
 
 
-fn create_traceback_module(query: Sequence, subject: Sequence,
-                           query_out: Sequence, subject_out: Sequence) -> TracebackModule
-{
-    let que_out_acc = get_sequence_acc_cpu(query_out);
-    let sub_out_acc = get_sequence_acc_cpu(subject_out);
+//-----------------------------------------------------------------------------
+// manages split points needed for Hirschberg's algorithm
+struct Splits {
+    part_dimensions:     fn(Index) -> IndexPair,
+    split_at:            fn(Index, Index) -> (),
+    halve_part_width:    fn() -> (),
+    get:                 fn() -> Vector,
+    release:             fn() -> ()
+}
 
-    for i in range(0, query_out.length){
-        que_out_acc.write(i, EMPTY_SYM);
-        sub_out_acc.write(i, EMPTY_SYM);
+
+
+//-----------------------------------------------------------------------------
+fn traceback_linmem_step(query: Sequence, subject: Sequence, 
+                         part_width: Index, splits: Splits, max_height: Index, 
+                         scheme: AlignmentScheme) -> Index
+{
+    let half_width = part_width / 2;
+    let num_halfs = (subject.length + half_width - 1) / part_width * 2;
+    let block_width = min(BLOCK_WIDTH, half_width);
+
+    let scoring = scoring_linmem_tb(query.length, subject.length, 
+                                    part_width, block_width, splits, scheme);
+
+    let iter = iteration_partitioned(half_width, num_halfs, block_width, 
+                                     splits, max_height);
+
+    relax(query, subject, scoring.matrix(), no_predecessors(), scheme, iter);
+
+    let left_half  = scoring.left_half_scores();
+    let right_half = scoring.right_half_scores();
+    
+    let new_max_h = hb_sum(left_half, right_half, splits, 
+                           query.length, subject.length, 
+                           part_width/2, num_halfs/2, scheme);
+
+    scoring.release();
+    new_max_h
+}
+
+
+//-------------------------------------------------------------------
+fn traceback_linmem_trace(query: Sequence, subject: Sequence, 
+                          splits: Splits, 
+                          tb: TracebackModule, 
+                          scheme: AlignmentScheme) -> ()
+{
+    let num_blocks_j = ceil_div(subject.length, MIN_PART_WIDTH_LT);
+
+    let scoring = scoring_linmem_tb_blockwise(MIN_PART_WIDTH_LT, scheme);
+
+    let predc = predecessors_blockwise(query.length, num_blocks_j, MIN_PART_WIDTH_LT, scheme);
+    
+    let iter = iteration_blockwise(MIN_PART_WIDTH_LT, splits);
+
+    relax(query, subject, scoring.matrix(), predc, scheme, iter);
+
+    let predc_matrix = predc.matrix();
+
+    for pre, offset_i, offset_j, block_height, block_width 
+        in iteration_traceback(predc_matrix, splits, subject.length, MIN_PART_WIDTH_LT)
+    {
+        tb.traceback_offset(pre, offset_i, offset_j, (block_height -1, block_width -1));
+    }
+    
+    release_device(predc_matrix.buf);
+    scoring.release();
+    predc.release();
+}
+
+
+//-----------------------------------------------------------------------------
+fn create_splits(query_length: Index, subject_length: Index, 
+                 part_width: Index, min_block_width: Index) -> Splits
+{
+    let num_blocks = ceil_div(subject_length, min_block_width);
+    let splits_vec = create_vector(num_blocks, 0, alloc_device);
+    let spls = view_vector(read_vector(splits_vec), write_vector(splits_vec));
+
+    let mut blocks_per_part = part_width / min_block_width;
+
+    // initialize splits
+    for i, spls in iteration_vector_1d(splits_vec, 2){
+        if i < 2 { spls.write(i * num_blocks - 1, i * query_length); }
     }
 
-    let mut alignment_start = (0, 0);
+    let part_dimensions = |part| {
+        let start_index = part * blocks_per_part - 1;
+        let end_index   = min((part + 1) * blocks_per_part - 1, num_blocks - 1);
+        let offset      = spls.read(start_index);
+        let height      = spls.read(end_index) - offset;
+        (offset, height)
+    };
 
-    let traceback_offset_fn = |pre_acc: MatrixSAcc, offset_query: Index, offset_subject: Index, end: (Index, Index)| {
+    let split_at = |part, position| {
+        let index = part * blocks_per_part + blocks_per_part / 2 - 1;
+        spls.write(index, position);
+    };
 
-        let que_acc_in  = get_sequence_acc_offset(read_sequence_cpu(query), write_sequence_cpu(query), offset_query);
-        let sub_acc_in  = get_sequence_acc_offset(read_sequence_cpu(subject), write_sequence_cpu(subject), offset_subject);
-        let que_acc_out = get_sequence_acc_offset(read_sequence_cpu(query_out), write_sequence_cpu(query_out), offset_query + offset_subject);
-        let sub_acc_out = get_sequence_acc_offset(read_sequence_cpu(subject_out), write_sequence_cpu(subject_out), offset_query + offset_subject);
+    Splits{
+        part_dimensions:   part_dimensions,
+        split_at:          split_at,
+        halve_part_width:  || blocks_per_part /= 2,
+        get:               || splits_vec,
+        release:           || release(splits_vec.buf)
+    }
+}
 
-        traceback_offset(que_acc_in, sub_acc_in, que_acc_out, sub_acc_out, pre_acc, end)
+
+//-----------------------------------------------------------------------------
+fn hb_sum(col_left: Vector, col_right: Vector, splits: Splits, 
+          query_length: Index, subject_length: Index, 
+          half_width: Index, parts: Index,
+          scheme: AlignmentScheme) -> Index
+{
+    let block_width = min(BLOCK_WIDTH, half_width * 2);
+    let blocks_per_part = half_width * 2 / block_width;  
+    
+    let block_max = create_vector(parts * blocks_per_part, 0, alloc_device);
+    let block_idx = create_vector(parts * blocks_per_part, 0, alloc_device);
+
+    let bmax = view_vector(read_vector(block_max), write_vector(block_max));
+    let bidx = view_vector(read_vector(block_idx), write_vector(block_idx));
+    
+    // find maximum blockwise
+    for block in iteration_1d(parts * blocks_per_part) {
+        if block < parts * blocks_per_part {
+            let part       = block / blocks_per_part;
+            let part_block = block % blocks_per_part;
+
+            let (part_offset, length) = splits.part_dimensions(part);
+
+            let mut max   = SCORE_MIN_VALUE;
+            let mut index = -1;
+
+            let lcol = view_vector_offset(read_vector(col_left), write_vector(col_left), part_offset);
+            let rcol = view_vector_offset(read_vector(col_right), write_vector(col_right), part_offset);
+
+            if part_block == 0 && length > 0{
+                let left_half_width  = half_width;
+                let right_half_width = min(half_width, subject_length - (part * 2 + 1) * half_width);
+                
+                // value at position -1
+                max = scheme.init_scores(left_half_width - 1) + rcol.read(length - 1);
+                index = -1;
+
+                // value at position length - 1
+                let last_val = lcol.read(length - 1) + scheme.init_scores(right_half_width -1);
+                if last_val > max {
+                    max = last_val;
+                    index = length - 1;
+                }
+            }
+
+            for i in range_step(part_block, length - 1, blocks_per_part){
+                let val = lcol.read(i) + rcol.read(length - i - 2);
+
+                if val > max {
+                    max = val;
+                    index = i;
+                }
+            }
+            bmax.write(block, max);
+            bidx.write(block, index);
+        }
+    }
+
+    let heights_vec = create_vector(parts * 2 + 1, 0, alloc_device);
+    let heights = view_vector(read_vector(heights_vec), write_vector(heights_vec));
+    
+    // find maximum partwise
+    for part in iteration_1d(parts) {
+        if part < parts {
+            let block_offset = part * blocks_per_part;
+            let (offset_i, height) = splits.part_dimensions(part);
+
+            let mut max   = bmax.read(block_offset);
+            let mut index = bidx.read(block_offset);
+
+            for i in range(1, blocks_per_part){
+                let val = bmax.read(block_offset + i);
+                if val > max{
+                    max = val;
+                    index = bidx.read(block_offset + i);
+                }
+            }
+
+            splits.split_at(part, offset_i + index + 1);
+            heights.write(part * 2, index + 1);
+            heights.write(part * 2 + 1, height - index - 1);
+
+            if part == parts -1 {
+                heights.write(parts * 2, query_length - (offset_i + height));
+            }
+        }
+    }
+
+    let (max_height, _) = reduce_max(heights_vec, 0, heights_vec.length);
+
+    release(block_max.buf);
+    release(block_idx.buf);
+    release(heights_vec.buf);
+
+    max_height
+}
+
+
+//-----------------------------------------------------------------------------
+fn traceback_module(query: Sequence, subject: Sequence,
+                    query_out: Sequence, subject_out: Sequence) 
+    -> TracebackModule
+{
+    let qry_out_view = view_sequence_cpu(query_out);
+    let sub_out_view = view_sequence_cpu(subject_out);
+
+    for i in range(0, query_out.length){
+        qry_out_view.write(i, EMPTY_CHAR);
+        sub_out_view.write(i, EMPTY_CHAR);
+    }
+
+    let mut al_start_idx = (0, 0);
+
+    let offset = |pre: Matrix8View, qry_of: Index, sub_of: Index, end: IndexPair| 
+    {
+        let qry_in  = view_sequence_offset(read_sequence_cpu(query), 
+                                           write_sequence_cpu(query), 
+                                           qry_of);
+        
+        let sub_in  = view_sequence_offset(read_sequence_cpu(subject), 
+                                           write_sequence_cpu(subject), 
+                                           sub_of);
+        
+        let qry_out = view_sequence_offset(read_sequence_cpu(query_out), 
+                                           write_sequence_cpu(query_out), 
+                                           qry_of + sub_of);
+        
+        let sub_out = view_sequence_offset(read_sequence_cpu(subject_out), 
+                                           write_sequence_cpu(subject_out), 
+                                           qry_of + sub_of);
+
+        traceback_offset(qry_in, sub_in, qry_out, sub_out, pre, end)
     };
 
     TracebackModule{
-        traceback:             |predc, end|           alignment_start = traceback_offset_fn(get_matrix_s_acc_cpu(predc), 0, 0, end),
-        traceback_offset:      |pre_acc, oi, oj, end| { traceback_offset_fn(pre_acc, oi, oj, end); },
-        get_alignment_query:   ||                     query_out,
-        get_alignment_subject: ||                     subject_out,
-        get_alignment_start:   ||                     alignment_start
+        traceback:  |predc, end| { 
+                al_start_idx = offset(view_matrix8_cpu(predc), 0, 0, end);
+            }
+        ,
+        traceback_offset:  |pre, oi, oj, end| { 
+                offset(pre, oi, oj, end); 
+            }
+        ,
+        alignment_query:    || query_out,
+        alignment_subject:  || subject_out,
+        alignment_start:    || al_start_idx
     }
 }
 
 
-fn traceback_offset(que_acc_in: SequenceAcc, sub_acc_in: SequenceAcc, 
-                    que_acc_out: SequenceAcc, sub_acc_out: SequenceAcc, 
-                    pre_acc: MatrixSAcc, end: (Index, Index)) 
-    -> (Index, Index)
+//-----------------------------------------------------------------------------
+fn traceback_offset(qry_in: SequenceView, sub_in: SequenceView, 
+                    qry_out: SequenceView, sub_out: SequenceView, 
+                    pre: Matrix8View, end: IndexPair) -> IndexPair
 {
-
     let (mut i, mut j) = end;
-    let mut pred = pre_acc.read(i, j);
+    let mut pred = pre.read(i, j);
 
     while pred != PRED_NONE {
         
-        let mut sym_q = GAP_SYM;
-        let mut sym_s = GAP_SYM;
+        let mut sym_q = GAP_CHAR;
+        let mut sym_s = GAP_CHAR;
 
         let out_pos = i + j + 1;
         
-        if pred == PRED_NO_GAP || pred == PRED_GAP_S{
-            sym_q = que_acc_in.read(i);
+        if pred == PRED_NO_GAP || pred == PRED_GAP_S {
+            sym_q = qry_in.read(i);
             i--;
         }
-        if pred == PRED_NO_GAP || pred == PRED_GAP_Q{
-            sym_s = sub_acc_in.read(j);
+        if pred == PRED_NO_GAP || pred == PRED_GAP_Q {
+            sym_s = sub_in.read(j);
             j--;
         }
 
-        que_acc_out.write(out_pos, sym_q);
-        sub_acc_out.write(out_pos, sym_s);
+        qry_out.write(out_pos, sym_q);
+        sub_out.write(out_pos, sym_s);
 
-        pred = pre_acc.read(i, j);
+        pred = pre.read(i, j);
     }
 
     (i + 1, j + 1)
-
 }

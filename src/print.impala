@@ -1,0 +1,125 @@
+//-------------------------------------------------------------------
+fn print_index(i: Index) -> () { print_i32(i); }
+fn print_score(s: Score) -> () { print_i32(s); }
+
+
+//-------------------------------------------------------------------
+fn print_matrix(query: Sequence, subject: Sequence, scores: Matrix) -> ()
+{
+    let qry = view_sequence_cpu(query);
+    let sub = view_sequence_cpu(subject);
+    let sco = view_matrix_cpu(scores);
+
+    print_string("\n\n\t\t");
+    for i in range(0, subject.length){
+        print_char(sub.read(i) as u8);
+        print_string("\t");
+    }
+
+    print_string("\n\n\n");
+    for i in range(-1, scores.height){
+        if i >= 0 {
+            print_char(qry.read(i) as u8);
+        }
+        print_string("\t");
+        for j in range(-1, scores.width){
+            print_score(sco.read(i,j) as i32);
+            print_string("\t");
+        }
+        print_string("\n\n\n");
+    }
+
+    print_string("\n\n");
+}
+
+
+//-------------------------------------------------------------------
+fn print_matrix8(query: Sequence, subject: Sequence, scores: Matrix8) -> () 
+{
+    let qry = view_sequence_cpu(query);
+    let sub = view_sequence_cpu(subject);
+    let sco = view_matrix8_cpu(scores);
+
+    print_string("\n\n\t\t");
+    for i in range(0, subject.length){
+        print_char(sub.read(i) as u8);
+        print_string("\t");
+    }
+    
+    print_string("\n\n\n");
+    for i in range(-1, scores.height){
+        if i >= 0 {
+            print_char(qry.read(i) as u8);
+        }
+        print_string("\t");
+        for j in range(-1, scores.width){
+            print_score(sco.read(i,j) as i32);
+            print_string("\t");
+        }
+        print_string("\n\n\n");
+    }
+
+    print_string("\n\n");
+}
+
+
+//-------------------------------------------------------------------
+fn print_last_matrix8core(scores: Matrix) -> () 
+{
+    let sco = view_matrix_cpu(scores);
+    let last_score = sco.read(scores.height-1, scores.width-1);
+    
+    print_string("\nlast score matrix entry: ");
+    print_score(last_score);
+    print_string("\n");
+}
+
+
+//-------------------------------------------------------------------
+fn print_last_vector_score(scores: Vector) -> ()
+{
+    let sco = view_vector_cpu(scores);
+    let last_score = sco.read(scores.length -1);
+
+    print_string("\nlast score vector entry: ");
+    print_score(last_score);
+    print_string("\n");
+}
+
+
+//-------------------------------------------------------------------
+fn print_vector(vec: Vector) -> () 
+{
+    let v = view_vector_cpu(vec);
+    for i in range(-1, vec.length){
+        print_score(v.read(i));
+        print_string(" ");
+    }
+    print_string("\n");
+}
+
+
+//-------------------------------------------------------------------
+fn print_sequence(seq: Sequence) -> ()
+{
+    let s = view_sequence_cpu(seq);
+    for i in range(0, seq.length){
+        print_char(s.read(i) as u8);
+    }
+}
+
+
+fn print_sequence_no_empty(seq: Sequence, empty_sym: Char) -> () 
+{
+    let s = view_sequence_cpu(seq);
+    for i in range(0, seq.length){
+        let sym = s.read(i);
+        if sym != empty_sym {
+            print_char(sym as u8);
+        }
+    }
+    print_string("\n");
+
+}
+
+

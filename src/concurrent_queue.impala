@@ -1,0 +1,87 @@
+//----------------------------------------------------------------------------
+struct IterBlock {
+    idx0: Index,
+    idx1: Index,
+    start0: Index,
+    start1: Index,
+    size0: Index,
+    size1: Index
+}
+
+
+fn @iter_block(idx: IndexPair, start: IndexPair, size: IndexPair) -> IterBlock 
+{
+    IterBlock {
+        idx0:   idx(0),
+        idx1:   idx(1),
+        start0: start(0),
+        start1: start(1),
+        size0:  size(0),
+        size1:  size(1)
+    }
+}
+
+
+//----------------------------------------------------------------------------
+extern "C" {
+
+fn initialize_queue(i32, i32, i32) -> ();
+fn finalize_queue() -> ();
+
+fn mark_complete(i32, i32) -> ();
+fn is_complete(i32, i32) -> i32;
+fn is_queued(i32, i32) -> i32;
+fn is_untouched(i32, i32) -> i32;
+
+fn signal_all_complete() -> ();
+fn all_complete() -> i32;
+
+fn enqueue_single(&IterBlock) -> i32;
+fn enqueue_bulk(&IterBlock, i32) -> i32;
+
+fn try_enqueue_single(&IterBlock) -> i32;
+fn try_enqueue_bulk(&IterBlock, i32) -> i32;
+
+fn try_dequeue_single(&IterBlock) -> i32;
+fn try_dequeue_bulk(&IterBlock, i32) -> i32;
+
+fn queue_approx_size() -> i32;
+
+
+fn wait_until_batch_ready() -> ();
+fn wait_until_complete() -> ();
+
+
+} // extern "C"
+
+
+
+//----------------------------------------------------------------------------
+struct BlockBatch {
+    data:    fn() -> &IterBlock,
+    size:    fn() -> Index,
+    get:     fn(Index) -> IterBlock,
+    release: fn() -> ()
+}
+
+
+fn block_batch(size: Index) -> BlockBatch 
+{
+    let buf = alloc_cpu(size * sizeof[IterBlock]());
+
+    BlockBatch {
+        data:    ||  { bitcast[&IterBlock](buf.data) },
+        size:    ||  { size },
+        get:     |i| { bitcast[&[IterBlock]](buf.data)(i) },
+        release: ||  { release(buf); }
+    }
+}
+
+
+fn try_dequeue_batch(batch: BlockBatch) -> bool 
+{
+    let success = try_dequeue_bulk(batch.data(), batch.size());
+    
+    success != 0
+}
+

@@ -1,6 +1,5 @@
 #!/bin/bash
 
-
 if [ $# -lt 1 ]; then
     echo "Usage: $0 <absolute path to AnyDSL installation>"
     exit
@@ -19,10 +18,19 @@ cmake .. -DAnyDSL_runtime_DIR:PATH=$runtime -DBACKEND=cpu
 make -j $threads
 cd ..
 
-# rm -rf build_gpu
-# mkdir build_gpu
-# cd build_gpu
-# cmake .. -DAnyDSL_runtime_DIR:PATH=$runtime -DBACKEND=cuda
-# make -j $threads
-# cd ..
+
+rm -rf build_avx
+mkdir build_avx
+cd build_avx_
+cmake .. -DAnyDSL_runtime_DIR:PATH=$runtime -DBACKEND=avx
+make -j $threads
+cd ..
+
+
+rm -rf build_cuda
+mkdir build_cuda
+cd build_cuda
+cmake .. -DAnyDSL_runtime_DIR:PATH=$runtime -DBACKEND=cuda
+make -j $threads
+cd ..
 

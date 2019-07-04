@@ -1,0 +1,533 @@
+//-----------------------------------------------------------------------------
+struct IterContext {
+    bid_x:  Index,
+    tid_x:  Index
+}
+
+fn iter_context(bid_x: Index, tid_x: Index) -> IterContext {
+    IterContext {
+        bid_x:  bid_x,
+        tid_x:  tid_x
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn @iteration(
+    query: Sequence, subject: Sequence, 
+    scores: Scores, predc: Predecessors, 
+    body: RelaxationBody) -> () 
+{
+    let acc = accelerator(device_id);
+
+    let num_blocks0 = ceil_div(query.length, BLOCK_HEIGHT);
+    let num_blocks1 = ceil_div(subject.length, BLOCK_WIDTH);
+    let max_blocks = min(num_blocks0, num_blocks1);
+    let block_diags = num_blocks0 + num_blocks1 - 1;
+    
+    let block = (BLOCK_WIDTH, 1, 1);
+
+    for benchmark_acc(acc) {
+        
+        // iterate over diagonals of blocks
+        for block_dia0 in range(0, block_diags) {
+        
+            let num_blocks = min3(block_dia0 + 1, max_blocks, block_diags - block_dia0);
+        
+            let grid  = (num_blocks * BLOCK_WIDTH, 1, 1);
+            
+            // execute kernel for each diagonal
+            for work in acc.exec(grid, block) {
+                
+                let tid_x = work.tidx();
+                let block_dia1 = work.bidx();
+
+                let block0 = min(block_dia0, num_blocks0 - 1) - block_dia1;
+                let block1 = max(block_dia0 - num_blocks0 + 1, 0) + block_dia1;
+
+                let start0 = block0 * BLOCK_HEIGHT;
+                let start1 = block1 * BLOCK_WIDTH;
+
+                let height = min(query.length - start0, BLOCK_HEIGHT);
+                let width  = min(subject.length - start1, BLOCK_WIDTH);
+
+                let qry_gl = view_sequence_offset(read_sequence(query), write_sequence(query), start0);
+                let sub_gl = view_sequence_offset(read_sequence(subject), write_sequence(subject), start1);
+
+                let qry = sequence_to_shared(tid_x, query, BLOCK_HEIGHT, qry_gl);
+                let sub = sequence_to_shared(tid_x, subject, BLOCK_WIDTH, sub_gl);
+
+                let sco = scores.iter_view(start0, start1, height, width, false, iter_context(block_dia1, tid_x)); 
+                let pre = predc.iter_view(start0, start1, height, width, iter_context(block_dia1, tid_x));      
+
+                let diags = BLOCK_WIDTH + BLOCK_HEIGHT - 1;
+
+                // iterate over diagonals of matrix entries
+                for dia0 in range(0, diags){
+
+                    acc.barrier();
+
+                    let j = tid_x;
+                    let i = dia0 - j;
+
+                    sco.update_begin_line(i);
+                    
+                    if i >= 0 && i < BLOCK_HEIGHT {
+                        body(i, j, qry, sub, sco, pre);
+                    }
+
+                    sco.update_end_line(i);
+                }
+                sco.block_end();
+            }
+            acc.sync();
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_blockwise(block_width: Index, splits: Splits) -> IterationFn 
+{
+    |query, subject, scores, predc, body| {
+        let acc = accelerator(device_id);
+
+        let num_blocks = ceil_div(subject.length, block_width);
+
+        let block = (block_width, 1, 1);
+        let grid  = (num_blocks * block_width, 1, 1);
+
+        for work in acc.exec(grid, block) {
+                
+            let tid_x = work.tidx();
+            let block1 = work.bidx();
+
+            let (start0, height) = splits.part_dimensions(block1);
+            let start1 = block1 * block_width;
+
+            let width = min(block_width, subject.length - start1);
+
+            let qry = view_sequence_offset(read_sequence(query), write_sequence(query), start0);
+            let sub = view_sequence_offset(read_sequence(subject), write_sequence(subject), start1);
+
+            let sco = scores.iter_view(start0, start1, height, width, false, iter_context(block1, tid_x)); 
+            let pre = predc.iter_view(start0, start1, height, width, iter_context(block1, tid_x));      
+
+            let diags = width + height - 1;
+
+            for dia0 in range(0, diags){
+
+                acc.barrier();
+
+                let j = tid_x;
+                let i = dia0 - j;
+
+                sco.update_begin_line(i);
+                    
+                if i >= 0 && i < height{
+                    body(i, j, qry, sub, sco, pre);
+                }
+
+                sco.update_end_line(i);
+            }
+            sco.block_end();
+        }
+        acc.sync();
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_partitioned(
+    half_size: Index, num_halfs: Index, block_width: Index, 
+    splits: Splits, max_part_height: Index) -> IterationFn
+{
+    |query, subject, scores, predc, body| {
+
+        let acc = accelerator(device_id);
+
+        // horizontal blocks in each half
+        let half_num_blocks1 = half_size / block_width;
+        // vertical blocks in each half
+        let half_num_blocks0 = ceil_div(max_part_height, BLOCK_HEIGHT);
+        // maximum blocks in one antidiagonal of a half
+        let half_max_blocks = min(half_num_blocks0, half_num_blocks1);
+        // amount of antidiagonals in a half
+        let block_diags = half_num_blocks0 + half_num_blocks1 - 1;
+    
+        let block = (BLOCK_WIDTH, 1, 1);
+
+        for benchmark_acc(acc) {
+            // iterate over diagonals of blocks
+            for block_dia0 in range(0, block_diags){
+
+                let half_num_blocks = min3(block_dia0 + 1, half_max_blocks, block_diags - block_dia0);
+                let grid  = (half_num_blocks * num_halfs * BLOCK_WIDTH, 1, 1);
+            
+                // execute kernel for each diagonal
+                for work in acc.exec(grid, block) {
+
+                    let tid_x = work.tidx();
+                    let block_dia1 = work.bidx();
+
+                    let half_idx = block_dia1 / half_num_blocks;
+                    let is_left_half = half_idx % 2 == 0;
+
+                    let half_block_dia1 = block_dia1 % half_num_blocks;
+                    let half_block0 = min(block_dia0, half_num_blocks0 - 1) - half_block_dia1;
+                    let half_block1 = max(block_dia0 - half_num_blocks0 + 1, 0) + half_block_dia1;
+                
+                    let half_start1 = half_idx * half_size;
+                    let (half_start0, half_height) = splits.part_dimensions(half_idx / 2);
+
+                    let start0 = half_start0 + half_block0 * BLOCK_HEIGHT;
+                    let start1 = half_start1 + half_block1 * block_width;
+
+                    let half_width  = min(half_size, subject.length - half_start1);
+
+                    let height = min(BLOCK_HEIGHT, half_height - half_block0 * BLOCK_HEIGHT);
+                    let width  = min(block_width, subject.length - start1);
+
+                    if width > 0 && height > 0{
+
+                        let qry = view_sequence_half(query, half_start0, half_height, half_block0, BLOCK_HEIGHT, is_left_half);
+                        let sub = view_sequence_half(subject, half_start1, half_width, half_block1, block_width, is_left_half);
+
+                        let sco = scores.iter_view(start0, start1, height, width, is_left_half, iter_context(block_dia1, tid_x)); 
+                        let pre = predc.iter_view(start0, start1, height, width, iter_context(block_dia1, tid_x));      
+
+                        let diags = height + width - 1;
+                
+                        let j = tid_x;
+
+                        // iterate over diagonals of matrix entries
+                        for dia0 in range(0, diags){
+
+                            acc.barrier();
+
+                            let i = dia0 - j;
+
+                            sco.update_begin_line(i);
+                    
+                            if i >= 0 && i < height && j < width{
+                                body(i, j, qry, sub, sco, pre);
+                            }
+
+                            sco.update_end_line(i);
+                        }
+                        sco.block_end();
+                    }
+                }
+                acc.sync();
+            }
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_traceback(
+    predc_cpu: Matrix8, splits: Splits, 
+    subject_length: Index, block_width: Index, 
+    body: fn (Matrix8View, Index, Index, Index, Index) -> ()) -> ()
+{
+    let splits_gpu = splits.get();
+    let splits_cpu = alloc_vector(splits_gpu, alloc_cpu);
+    copy_vector(splits_gpu, splits_cpu);
+
+    let spl = view_vector_cpu(splits_cpu);
+
+    let mut start0 = 0;
+    let mut end0    = 0;
+    
+    for block in range(0, splits_cpu.length) {
+
+        start0 = end0;
+        end0  = spl.read(block);
+
+        let start1 = block * block_width;
+        let predc_start0 = start0 + block;
+
+        let height = end0 - start0;
+        let width = min(block_width, subject_length - start1);
+
+        let pre = view_matrix8_offset(predc_cpu, read_matrix8_cpu(predc_cpu), write_matrix8_cpu(predc_cpu), predc_start0, 0);
+        body(pre, start0, start1, height, width);
+    }
+
+    release(splits_cpu.buf);
+
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_1d(length: Index, body: fn(Index) -> ()) -> (){
+    
+    let acc = accelerator(device_id);
+    
+    let num_blocks = ceil_div(length, BLOCK_WIDTH);
+    let block = (BLOCK_WIDTH, 1, 1);
+    let grid  = (num_blocks * BLOCK_WIDTH, 1, 1);
+
+    for work in acc.exec(grid, block) {
+        body(work.gidx());
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_matrix_1d(matrix: Matrix, length: Index, 
+                       body: fn(Index, MatrixView) -> ()) -> ()
+{
+    let m = view_matrix(matrix, read_matrix(matrix), write_matrix(matrix));
+    
+    for i in iteration_1d(length){
+        body(i, m);
+    }
+}
+
+fn iteration_matrix8_1d(matrix: Matrix8, length: Index, 
+                        body: fn(Index, Matrix8View) -> ()) -> ()
+{
+    let m = view_matrix8(matrix, read_matrix8(matrix), write_matrix8(matrix));
+    
+    for i in iteration_1d(length) {
+        body(i, m);
+    }
+}
+
+
+fn iteration_vector_1d(vector: Vector, length: Index, 
+                       body: fn(Index, VectorView) -> ()) -> ()
+{
+    let v = view_vector(read_vector(vector), write_vector(vector));
+
+    for i in iteration_1d(length){
+        body(i, v);
+    }
+}
+
+fn iteration_2_vectors_1d(vector_1: Vector, vector_2: Vector, length: Index, 
+                          body: fn(Index, VectorView, VectorView) -> ()) -> ()
+{
+    let v1 = view_vector(read_vector(vector_1), write_vector(vector_1));
+    let v2 = view_vector(read_vector(vector_2), write_vector(vector_2));
+
+    for i in iteration_1d(length){
+        body(i, v1, v2);
+    }
+}
+
+
+
+
+//-----------------------------------------------------------------------------
+static OPS_PER_THREAD_REDUCTION = 1;
+
+struct ReductionData {
+    reduce_global: fn(Index, Index) -> (),
+    reduce_shared: fn(Index, Index) -> (),
+    out:           fn(Index) -> ()
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_reduction(
+    vector_gpu: Vector, index_cpu: Vector, score_cpu: Vector, 
+    offset: Index, length: Index,
+    body: fn(Score, Score) -> bool) -> ()
+{
+    let acc = accelerator(device_id);
+    let mut swap = true;
+
+    let mut len = length;
+    
+    let vector_1  = create_vector(ceil_div(length, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION) * BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION, 
+                                  0, acc.alloc);
+    
+    let vector_2  = create_vector(ceil_div(length, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION), 
+                                  0, acc.alloc);
+    
+    let indices_1 = alloc_vector(vector_gpu, acc.alloc);
+    let indices_2 = alloc_vector(vector_2, acc.alloc); 
+    
+    copy_vector_offset(vector_gpu, offset + 1, vector_1, 1, length - 1);
+    for i, vec in iteration_vector_1d(indices_1, indices_1.length + 1){
+        vec.write(i, i + offset);
+    }
+
+    while len > 1 {
+
+        let vector_in   = if swap { vector_1  } else { vector_2  };
+        let vector_out  = if swap { vector_2  } else { vector_1  };
+        let indices_in  = if swap { indices_1 } else { indices_2 };
+        let indices_out = if swap { indices_2 } else { indices_1 };
+        swap = !swap;
+
+        let vec_in  = view_vector(read_vector(vector_in), write_vector(vector_in));
+        let vec_out = view_vector(read_vector(vector_out), write_vector(vector_out));
+        let idx_in  = view_vector(read_vector(indices_in), write_vector(indices_in));
+        let idx_out = view_vector(read_vector(indices_out), write_vector(indices_out));
+
+        for tid_x in reduction_kernel(len){
+
+            let vector_shared  = reserve_shared[Score32](BLOCK_WIDTH);
+            let indices_shared = reserve_shared[Score32](BLOCK_WIDTH);
+            vector_shared(tid_x) = SCORE_MIN_VALUE;
+
+            ReductionData{
+                reduce_global: |global_i, shared_i| {
+                    let v = vec_in.read(global_i);
+                    let v_i = idx_in.read(global_i);
+                    if body(v, vector_shared(shared_i)){
+                        vector_shared(shared_i) = v;
+                        indices_shared(shared_i) = v_i;
+                    }
+                },
+                reduce_shared: |index_1, index_2| {
+                    let v = vector_shared(index_1);
+                    let v_i = indices_shared(index_1);
+                    if body(v, vector_shared(index_2)){
+                        vector_shared(index_2) = v;
+                        indices_shared(index_2) = v_i;
+                    }
+                },
+                out: |out_idx| {
+                    vec_out.write(out_idx, vector_shared(0));
+                    idx_out.write(out_idx, indices_shared(0));
+                }
+            }
+        }
+        len = ceil_div(len, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION);
+    }
+    let indices_out = if swap { indices_1 } else { indices_2 };
+    copy_vector(indices_out, index_cpu);
+    let vector_out = if swap { vector_1 } else { vector_2 };
+    copy_vector(vector_out, score_cpu);
+    
+    release(vector_1.buf);
+    release(vector_2.buf);
+    release(indices_1.buf);
+    release(indices_2.buf);
+}
+
+
+//-----------------------------------------------------------------------------
+fn iteration_sum_reduction(
+    vector_gpu: Vector, index_cpu: Vector, score_cpu: Vector, 
+    offset: Index, length: Index,
+    body: fn(Score, Score) -> bool) -> ()
+{
+    let acc = accelerator(device_id);
+    let mut swap = true;
+
+    let mut len = length;
+    
+    let vector_1  = create_vector(ceil_div(length, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION) * BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION, 
+                                  0, acc.alloc);
+
+    let vector_2  = create_vector(ceil_div(length, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION), 
+                                  0, acc.alloc);
+
+    let indices_1 = alloc_vector(vector_gpu, acc.alloc);
+    let indices_2 = alloc_vector(vector_2, acc.alloc); 
+    
+    copy_vector_offset(vector_gpu, offset + 1, vector_1, 1, length - 1);
+    for i, vec in iteration_vector_1d(indices_1, indices_1.length + 1){
+        vec.write(i, i + offset);
+    }
+
+    while len > 1 {
+
+        let vector_in   = if swap { vector_1  } else { vector_2  };
+        let vector_out  = if swap { vector_2  } else { vector_1  };
+        let indices_in  = if swap { indices_1 } else { indices_2 };
+        let indices_out = if swap { indices_2 } else { indices_1 };
+        swap = !swap;
+
+        let vec_in  = view_vector(read_vector(vector_in), write_vector(vector_in));
+        let vec_out = view_vector(read_vector(vector_out), write_vector(vector_out));
+        let idx_in  = view_vector(read_vector(indices_in), write_vector(indices_in));
+        let idx_out = view_vector(read_vector(indices_out), write_vector(indices_out));
+
+        for tid_x in reduction_kernel(len){
+
+            let vector_shared  = reserve_shared[Score32](BLOCK_WIDTH);
+            let indices_shared = reserve_shared[Score32](BLOCK_WIDTH);
+            vector_shared(tid_x) = SCORE_MIN_VALUE;
+
+            ReductionData{
+                reduce_global: |global_i, shared_i| {
+                    let v = vec_in.read(global_i);
+                    let v_i = idx_in.read(global_i);
+                    if body(v, vector_shared(shared_i)){
+                        vector_shared(shared_i) = v;
+                        indices_shared(shared_i) = v_i;
+                    }
+                },
+                reduce_shared: |index_1, index_2| {
+                    let v = vector_shared(index_1);
+                    let v_i = indices_shared(index_1);
+                    if body(v, vector_shared(index_2)){
+                        vector_shared(index_2) = v;
+                        indices_shared(index_2) = v_i;
+                    }
+                },
+                out: |out_idx| {
+                    vec_out.write(out_idx, vector_shared(0));
+                    idx_out.write(out_idx, indices_shared(0));
+                }
+            }
+        }
+        len = ceil_div(len, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION);
+    }
+    let indices_out = if swap { indices_1 } else { indices_2 };
+    copy_vector(indices_out, index_cpu);
+    let vector_out = if swap { vector_1 } else { vector_2 };
+    copy_vector(vector_out, score_cpu);
+    
+    release(vector_1.buf);
+    release(vector_2.buf);
+    release(indices_1.buf);
+    release(indices_2.buf);
+}
+
+
+//-----------------------------------------------------------------------------
+fn reduction_kernel(length: Index, fetch: fn(Index) -> ReductionData) -> () 
+{
+    let acc = accelerator(device_id);
+        
+    let num_blocks = ceil_div(length, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION);
+    let block = (BLOCK_WIDTH, 1, 1);
+    let grid  = (num_blocks * BLOCK_WIDTH, 1, 1);
+
+    for work in acc.exec(grid, block) {
+
+        let bid_x = work.bidx();
+        let tid_x = work.tidx();
+        let gdim_x = work.gdimx();
+
+        let data = fetch(tid_x);
+
+        let mut i = bid_x * BLOCK_WIDTH + tid_x;
+
+        while i < length {
+            data.reduce_global(i, tid_x);
+            i += gdim_x;
+        }
+                        
+        let mut s = BLOCK_WIDTH / 2;
+        while s > 0 {
+            acc.barrier();
+            if(tid_x < s) {
+                data.reduce_shared(tid_x + s, tid_x);
+            }
+            s /= 2;
+        }
+        if tid_x == 0 {
+            data.out(bid_x);
+        }
+    }
+    acc.sync();
+}

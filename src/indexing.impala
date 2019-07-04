@@ -1,0 +1,325 @@
+//-------------------------------------------------------------------
+// min / max
+//-------------------------------------------------------------------
+fn @min(a: Index, b: Index) -> Index { if a < b { a } else { b } }
+fn @max(a: Index, b: Index) -> Index { if a > b { a } else { b } }
+
+fn @min3(a: Index, b: Index, c: Index) -> Index { min(min(a, b), c) }
+fn @max3(a: Index, b: Index, c: Index) -> Index { max(max(a, b), c) }
+
+fn @min4(a: Index, b: Index, c: Index, d: Index) -> Index { min(min(min(a, b), c), d) }
+fn @max4(a: Index, b: Index, c: Index, d: Index) -> Index { max(max(max(a, b), c), d) }
+
+fn @abs(a: Index) -> Index { if a < 0 { -a } else { a } }
+
+
+//-----------------------------------------------------------------------------
+fn @ceil_div(a: Index, b: Index) -> Index {
+    (a + b - 1 as Index) / b 
+}
+
+fn @round_up(num: Index, multiple: Index) -> Index {
+    ((num + multiple - 1) / multiple) * multiple
+}
+
+fn @round_down(num: Index, multiple: Index) -> Index {
+    (num / multiple) * multiple 
+}
+
+
+//-----------------------------------------------------------------------------
+fn @next_pow_2(i: Index) -> Index {
+    if i == 0 { return(0) }
+    let mut n = i - 1;
+    let mut r = 1;
+    while n > 0 {
+        n >>= 1;
+        r <<= 1;
+    }
+    r
+}
+
+
+
+//-------------------------------------------------------------------
+type RangeFn = fn(Index, Index, fn (Index) -> ()) -> ();
+
+
+
+//-------------------------------------------------------------------
+// {first,length} index generators
+//-------------------------------------------------------------------
+fn @indices(first: Index, length: Index, 
+           body: fn (Index) -> ()) -> () 
+{
+    @@range(first, first + length - 1 as Index, body)
+}
+
+fn @reverse_indices(first: Index, length: Index, 
+                   body: fn (Index) -> ()) -> () 
+{
+    @@range_rev(first, first + 1 as Index - length, body)
+}
+
+fn @strided_indices(first: Index, length: Index, step: Index, 
+                   body: fn(Index) -> ()) -> () 
+{
+    @@range_step(first, first + length - 1 as Index, step, body)
+}
+
+
+
+//-------------------------------------------------------------------
+// index pair 
+//-------------------------------------------------------------------
+type IndexPair = (Index, Index);
+
+
+fn print_indices(p: IndexPair) -> () {
+    print_string("(");
+    print_index(p(0));
+    print_string(",");
+    print_index(p(1));
+    print_string(")");
+}
+
+
+fn zero_indices() -> IndexPair
+{
+    (0 as Index, 0 as Index)
+}
+
+
+fn offset(idx: IndexPair, n: Index) -> IndexPair
+{
+    ( idx(0) + n, idx(1) + n )
+}
+
+
+
+//-------------------------------------------------------------------
+// index pair generators; all {first,length} based!
+//-------------------------------------------------------------------
+fn @block_indices(first: IndexPair, length: IndexPair,
+                 body: fn (IndexPair) -> ()) -> () 
+{
+    for i in indices(first(0), length(0)) {
+        for j in indices(first(1), length(1)) {
+             @@body( (i, j) )
+        }
+    }
+}
+
+
+
+//-------------------------------------------------------------------
+enum BlockBoundary {
+    x_first, x_last, y_first, y_last
+}
+
+fn block_boundary_indices(
+    @boundary: BlockBoundary,
+    first: IndexPair, length: IndexPair,
+    body: fn (IndexPair) -> ()) -> () 
+{
+    let (l0, l1) = length;
+    let (f0, f1) = first;
+
+    match boundary { 
+        BlockBoundary::x_first => {
+            for i in indices(f1, l1) {
+               @@body((f0, i))
+            }
+        }, 
+        BlockBoundary::x_last => {
+            for i in indices(f0, l0) {
+               @@body((i, f1))
+            }
+        }, 
+        BlockBoundary::y_first => {
+            let qmax = f0 + l0 - 1 as Index;
+            for i in indices(f1, l1) {
+               @@body((qmax, i))
+            }
+        },
+        BlockBoundary::y_last => {
+            let smax = f1 + l1 - 1 as Index;
+            for i in indices(f0, l0) {
+               @@body((i, smax))
+            }
+        }
+    };
+}
+
+
+//-------------------------------------------------------------------
+fn @num_blocks(length: IndexPair, blockdim: IndexPair) -> IndexPair 
+{
+    ( ceil_div(length(0), blockdim(0)), 
+      ceil_div(length(1), blockdim(1)) )
+}
+
+fn @last_indices(first: IndexPair, length: IndexPair) -> IndexPair
+{ 
+    (first(0) + length(0) - 1 as Index,
+     first(1) + length(1) - 1 as Index )
+}
+
+
+//-------------------------------------------------------------------
+fn @bounded_block_size(start: IndexPair, blockdim: IndexPair, 
+                       maximum: IndexPair) -> IndexPair
+{
+    let (s0, s1) = start;
+    let (t0, t1) = blockdim;
+
+    let l0 = s0 + t0;
+    let l1 = s1 + t1;
+
+    ( 
+        if l0 <= maximum(0) { t0 } else { t0 - (l0 - maximum(0)) + 1 as Index },
+        if l1 <= maximum(1) { t1 } else { t1 - (l1 - maximum(1)) + 1 as Index }
+    )
+}
+
+
+//-----------------------------------------------------------------------------
+fn @diagonal_blocking_scheme(
+    first: IndexPair, length: IndexPair, blockdim: IndexPair,
+    body: fn(IndexPair) -> () ) -> ()
+{
+    for _, start, size 
+        in diagonal_index_blocks(first, length, blockdim, parallel_schedule)
+    {
+        for indexPair in block_indices(start, size) {
+            @@body(indexPair)
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn regular_index_blocks(
+    first: IndexPair, length: IndexPair, blockdim: IndexPair,
+    schedule: Schedule,
+    body: fn(IndexPair,IndexPair,IndexPair) -> () ) -> ()
+{
+    let blocks = num_blocks(length, blockdim); 
+    let last = last_indices(first, length);
+
+    for i in schedule(blocks(0)) {
+        for j in range(0 as Index, blocks(1)) {
+
+            let start = ( first(0) + i * blockdim(0), 
+                          first(1) + j * blockdim(1) );
+
+            let size  = bounded_block_size(start, blockdim, last);
+            let id = (i,j);
+
+            body(id, start, size);
+        }
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn index_blocks_in_diagonal(
+    d: Index, 
+    first: IndexPair, length: IndexPair, blockdim: IndexPair,
+    schedule: Schedule,
+    body: fn(IndexPair,IndexPair,IndexPair) -> () ) -> ()
+{
+    let blocks = num_blocks(length, blockdim); 
+    let last = last_indices(first, length);
+
+    let diagonals = blocks(0) + blocks(1) - 1 as Index;
+    let max_in_diag = min(blocks(0), blocks(1));
+    let n = min3(d + 1 as Index, max_in_diag, diagonals - d);
+
+    for i in schedule(n) {
+
+        let idx = (
+            min(d, blocks(1) - 1 as Index) - i,
+            if d < blocks(1) { i } else { d - blocks(1) + 1 as Index + i } );
+    
+        let start = ( first(0) + idx(0) * blockdim(0), 
+                      first(1) + idx(1) * blockdim(1) );
+
+        let size  = bounded_block_size(start, blockdim, last);
+        let id = (d,i);
+
+        body(id, start, size);
+    }
+}
+
+
+//-----------------------------------------------------------------------------
+fn diagonal_index_blocks(
+    first: IndexPair, length: IndexPair, blockdim: IndexPair,
+    schedule: Schedule,
+    body: fn(IndexPair,IndexPair,IndexPair) -> () ) -> ()
+{
+    let blocks = num_blocks(length, blockdim); 
+    let last = last_indices(first, length);
+
+    let diagonals = blocks(0) + blocks(1) - 1 as Index;
+    let max_in_diag = min(blocks(0), blocks(1));
+    
+
+    for d in unroll(0 as Index, diagonals) {
+
+        let n = min3(d + 1 as Index, max_in_diag, diagonals - d);
+
+        for i in schedule(n) {
+
+            let idx = (
+                min(d, blocks(1) - 1 as Index) - i,
+                if d < blocks(1) { i } else { d - blocks(1) + 1 as Index + i } );
+        
+            let start = ( first(0) + idx(0) * blockdim(0), 
+                          first(1) + idx(1) * blockdim(1) );
+
+            let size  = bounded_block_size(start, blockdim, last);
+            let id = (d,i);
+
+            body(id, start, size);
+        }
+    }
+}
+
+
+
+//-----------------------------------------------------------------------------
+// only upper left triangle up until the largest (anti-)diagonal
+fn diagonal_index_block_triangle(
+    first: IndexPair, length: IndexPair, blockdim: IndexPair,
+    schedule: Schedule,
+    body: fn(IndexPair,IndexPair,IndexPair) -> () ) -> ()
+{
+    let blocks = num_blocks(length, blockdim); 
+    let last = last_indices(first, length);
+
+    let diagonals = (blocks(0) + blocks(1) + 1 as Index) / 2;
+    let max_in_diag = min(blocks(0), blocks(1));
+
+    for d in unroll(0 as Index, diagonals) {
+
+        let n = min3(d + 1 as Index, max_in_diag, diagonals - d);
+
+        for i in schedule(n) {
+
+            let idx = (
+                min(d, blocks(1) - 1 as Index) - i,
+                if d < blocks(1) { i } else { d - blocks(1) + 1 as Index + i } );
+        
+            let start = ( first(0) + idx(0) * blockdim(0), 
+                          first(1) + idx(1) * blockdim(1) );
+
+            let size  = bounded_block_size(start, blockdim, last);
+            let id = (d,i);
+
+            body(id, start, size);
+        }
+    }
+}
+

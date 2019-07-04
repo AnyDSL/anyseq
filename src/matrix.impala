@@ -1,0 +1,423 @@
+// ----------------------------------------------------------------------------
+// matrix accessor
+// ----------------------------------------------------------------------------
+type MatrixReadFn  = fn(Index) -> Score32;
+type MatrixWriteFn = fn(Index, Score32) -> ();
+
+// manages matrix-like memory storage
+struct Matrix {
+    buf:        Buffer,
+    height:     Index,
+    width:      Index,
+    mem_height: Index,
+    mem_width:  Index
+}
+
+// matrix-like memory access
+struct MatrixView {
+    read:  fn(Index, Index) -> Score32,
+    write: fn(Index, Index, Score32) -> ()
+}
+
+
+//-------------------------------------------------------------------
+fn make_matrix(height: Index, width: Index, 
+               mem_height: Index, mem_width: Index, 
+               buf: Buffer) -> Matrix
+{
+    Matrix {
+        buf:        buf,
+        height:     height,
+        width:      width,
+        mem_height: mem_height,
+        mem_width:  mem_width
+    }
+}
+
+
+//-------------------------------------------------------------------
+fn read_matrix_cpu(matrix: Matrix) -> MatrixReadFn {
+    |idx| bitcast[&[Score32]](matrix.buf.data)(idx) 
+}
+fn write_matrix_cpu(matrix: Matrix) -> MatrixWriteFn {
+    |idx, val| bitcast[&mut[Score32]](matrix.buf.data)(idx) = val 
+}
+
+
+//-------------------------------------------------------------------
+fn alloc_matrix(matrix: Matrix, alloc: AllocFn) -> Matrix
+{
+    make_matrix(matrix.height, matrix.width, 
+                matrix.mem_height, matrix.mem_width, 
+                alloc((matrix.mem_height) * (matrix.mem_width) * sizeof[Score32]()))
+}
+
+
+fn create_matrix(height: Index, width: Index, 
+                 pad_h: Index, pad_w: Index, alloc: AllocFn) -> Matrix
+{
+    let mem_height = height + pad_h + 1;
+    let mem_width  = width + pad_w + 1;
+
+    make_matrix(height, width, mem_height, mem_width, 
+                alloc(mem_height * mem_width * sizeof[Score32]()))
+}
+
+
+//-------------------------------------------------------------------
+fn copy_matrix(src: Matrix, dst: Matrix) -> () {
+    copy(src.buf, dst.buf);
+}
+
+
+//-------------------------------------------------------------------
+fn view_matrix_std_offset(matrix: Matrix, read: 
+                          MatrixReadFn, write: MatrixWriteFn, 
+                          oi: Index, oj: Index) -> MatrixView
+{
+    MatrixView{
+        read:  |i, j|         read((i + oi + 1) * (matrix.mem_width) + j + oj + 1),
+        write: |i, j, value| write((i + oi + 1) * (matrix.mem_width) + j + oj + 1, value)
+    }
+}
+
+
+fn view_matrix_coal_offset(matrix: Matrix, 
+                           read: MatrixReadFn, write: MatrixWriteFn, 
+                           oi: Index, oj: Index) -> MatrixView
+{
+        
+    let coalesced_pos = |i: Index, j: Index| -> Index {
+        ((i + oi + j + oj + 2) % matrix.mem_height) * (matrix.mem_width) + j + oj
+    };
+
+    MatrixView{
+        read:  |i, j|         read(coalesced_pos(i, j)),
+        write: |i, j, value| write(coalesced_pos(i, j), value)
+    }
+}
+
+
+
+
+// ----------------------------------------------------------------------------
+// matrix with 16 bit entries
+// ----------------------------------------------------------------------------
+type Matrix16ReadFn  = fn(Index) -> Score16;
+type Matrix16WriteFn = fn(Index, Score16) -> ();
+
+struct Matrix16 {
+    buf:        Buffer,
+    height:     Index,
+    width:      Index,
+    mem_height: Index,
+    mem_width:  Index
+}
+
+struct Matrix16View {
+    read:  fn(Index, Index) -> Score16,
+    write: fn(Index, Index, Score16) -> ()
+}
+
+
+//-------------------------------------------------------------------
+fn make_matrix16(height: Index, width: Index, 
+                 mem_height: Index, mem_width: Index, 
+                 buf: Buffer) -> Matrix16
+{
+    Matrix16 {
+        buf:        buf,
+        height:     height,
+        width:      width,
+        mem_height: mem_height,
+        mem_width:  mem_width
+    }
+}
+
+
+//-------------------------------------------------------------------
+fn read_matrix16_cpu(matrix: Matrix16) -> Matrix16ReadFn {
+    |idx| bitcast[&[Score16]](matrix.buf.data)(idx)
+}
+fn write_matrix16_cpu(matrix: Matrix16) -> Matrix16WriteFn { 
+    |idx, val| bitcast[&mut[Score16]](matrix.buf.data)(idx) = val 
+}
+
+
+//-------------------------------------------------------------------
+fn alloc_matrix16(matrix: Matrix16, alloc: AllocFn) -> Matrix16 
+{
+    make_matrix16(matrix.height, matrix.width, 
+                  matrix.mem_height, matrix.mem_width, 
+                  alloc((matrix.mem_height) * (matrix.mem_width) * sizeof[Score16]()))
+}
+
+
+fn create_matrix16(height: Index, width: Index, 
+                   pad_h: Index, pad_w: Index, alloc: AllocFn) -> Matrix16 
+{
+    let mem_height = height + pad_h + 1;
+    let mem_width  = width + pad_w + 1;
+
+    make_matrix16(height, width, 
+                  mem_height, mem_width, 
+                  alloc(mem_height * mem_width * sizeof[Score16]()))
+}
+
+
+//-------------------------------------------------------------------
+fn copy_matrix16(src: Matrix16, dst: Matrix16) -> () {
+    copy(src.buf, dst.buf);
+}
+
+fn view_matrix16_std_offset(matrix: Matrix16, 
+                               read: Matrix16ReadFn, write: Matrix16WriteFn, 
+                               oi: Index, oj: Index) -> Matrix16View
+{
+    Matrix16View {
+        read:  |i, j|         read((i + oi + 1) * (matrix.mem_width) + j + oj + 1),
+        write: |i, j, value| write((i + oi + 1) * (matrix.mem_width) + j + oj + 1, value)
+    }
+}
+
+
+//-------------------------------------------------------------------
+fn view_matrix16_coal_offset(matrix: Matrix16, 
+                                read: Matrix16ReadFn, write: Matrix16WriteFn, 
+                                oi: Index, oj: Index) -> Matrix16View
+{
+    let coalesced_pos = |i: Index, j: Index| -> Index {
+        ((i + oi + j + oj + 2) % matrix.mem_height) * (matrix.mem_width) + j + oj + 1
+    };
+
+    Matrix16View {
+        read:  |i, j|         read(coalesced_pos(i, j)),
+        write: |i, j, value| write(coalesced_pos(i, j), value)
+    }
+}
+
+
+
+// ----------------------------------------------------------------------------
+// matrix with byte-size entries
+// ----------------------------------------------------------------------------
+type Matrix8ReadFn  = fn(Index) -> Score8;
+type Matrix8WriteFn = fn(Index, Score8) -> ();
+
+struct Matrix8 {
+    buf:        Buffer,
+    height:     Index,
+    width:      Index,
+    mem_height: Index,
+    mem_width:  Index
+}
+
+struct Matrix8View {
+    read:  fn(Index, Index) -> Score8,
+    write: fn(Index, Index, Score8) -> ()
+}
+
+
+//-------------------------------------------------------------------
+fn make_matrix8(height: Index, width: Index, 
+                 mem_height: Index, mem_width: Index, 
+                 buf: Buffer) -> Matrix8
+{
+    Matrix8 {
+        buf:        buf,
+        height:     height,
+        width:      width,
+        mem_height: mem_height,
+        mem_width:  mem_width
+    }
+}
+
+
+//-------------------------------------------------------------------
+fn read_matrix8_cpu(matrix: Matrix8) -> Matrix8ReadFn {
+    |idx| bitcast[&[Score8]](matrix.buf.data)(idx)
+}
+fn write_matrix8_cpu(matrix: Matrix8) -> Matrix8WriteFn { 
+    |idx, val| bitcast[&mut[Score8]](matrix.buf.data)(idx) = val 
+}
+
+
+//-------------------------------------------------------------------
+fn alloc_matrix8(matrix: Matrix8, alloc: AllocFn) -> Matrix8 
+{
+    make_matrix8(matrix.height, matrix.width, 
+                  matrix.mem_height, matrix.mem_width, 
+                  alloc((matrix.mem_height) * (matrix.mem_width) * sizeof[Score8]()))
+}
+
+
+fn create_matrix8(height: Index, width: Index, 
+                   pad_h: Index, pad_w: Index, alloc: AllocFn) -> Matrix8 
+{
+    let mem_height = height + pad_h + 1;
+    let mem_width  = width + pad_w + 1;
+
+    make_matrix8(height, width, 
+                  mem_height, mem_width, 
+                  alloc(mem_height * mem_width * sizeof[Score8]()))
+}
+
+
+//-------------------------------------------------------------------
+fn copy_matrix8(src: Matrix8, dst: Matrix8) -> () {
+    copy(src.buf, dst.buf);
+}
+
+fn view_matrix8_std_offset(matrix: Matrix8, 
+                           read: Matrix8ReadFn, write: Matrix8WriteFn, 
+                           oi: Index, oj: Index) -> Matrix8View
+{
+    Matrix8View {
+        read:  |i, j|         read((i + oi + 1) * (matrix.mem_width) + j + oj + 1),
+        write: |i, j, value| write((i + oi + 1) * (matrix.mem_width) + j + oj + 1, value)
+    }
+}
+
+
+//-------------------------------------------------------------------
+fn view_matrix8_coal_offset(matrix: Matrix8, 
+                            read: Matrix8ReadFn, write: Matrix8WriteFn, 
+                            oi: Index, oj: Index) -> Matrix8View
+{
+    let coalesced_pos = |i: Index, j: Index| -> Index {
+        ((i + oi + j + oj + 2) % matrix.mem_height) * (matrix.mem_width) + j + oj + 1
+    };
+
+    Matrix8View {
+        read:  |i, j|         read(coalesced_pos(i, j)),
+        write: |i, j, value| write(coalesced_pos(i, j), value)
+    }
+}
+
+
+
+// ----------------------------------------------------------------------------
+// vector accessors
+// ----------------------------------------------------------------------------
+struct Vector {
+    buf:        Buffer,
+    length:     Index,
+    mem_length: Index,
+}
+
+struct VectorView {
+    read:  fn(Index) -> Score32,
+    write: fn(Index, Score32) -> ()
+}
+
+struct RotationView {
+    read_upper:   fn(Index) -> Score32,
+    read_middle:  fn(Index) -> Score32,
+    read_lower:   fn(Index) -> Score32,
+    write_upper:  fn(Index, Score32) -> (),
+    write_middle: fn(Index, Score32) -> (),
+    write_lower:  fn(Index, Score32) -> (),
+    rotate:       fn() -> ()
+}
+
+
+//-------------------------------------------------------------------
+fn make_vector(length: Index, mem_length: Index, buf: Buffer) -> Vector 
+{
+    Vector {
+        buf:        buf,
+        length:     length,
+        mem_length: mem_length,
+    }
+}
+
+
+//-------------------------------------------------------------------
+fn read_vector_cpu(vector: Vector) -> MatrixReadFn { 
+    |idx| bitcast[&[Score32]](vector.buf.data)(idx)
+}
+fn write_vector_cpu(vector: Vector) -> MatrixWriteFn { 
+    |idx, val| bitcast[&mut[Score32]](vector.buf.data)(idx) = val 
+}
+
+
+//-------------------------------------------------------------------
+fn alloc_vector(vector: Vector, alloc: AllocFn) -> Vector 
+{
+    make_vector(vector.length, vector.mem_length, 
+                alloc(vector.mem_length * sizeof[Score32]()) )
+}
+
+
+fn create_vector(length: Index, pad: Index, alloc: AllocFn) -> Vector 
+{
+    let mem_length = length + pad + 1;
+    make_vector(length, mem_length, alloc(mem_length * sizeof[Score32]()))
+}
+
+
+//-------------------------------------------------------------------
+fn copy_vector(src: Vector, dst: Vector) -> () {
+    copy(src.buf, dst.buf);
+}
+
+
+fn copy_vector_offset(src: Vector, src_start: Index, 
+                      dst: Vector, dst_start: Index, 
+                      length: Index) -> ()
+{
+    copy_offset(src.buf, src_start * sizeof[Score32](), 
+                dst.buf, dst_start * sizeof[Score32](),  
+                (length + 1) * sizeof[Score32]() );
+}
+
+
+//-------------------------------------------------------------------
+fn view_vector_cpu(vector: Vector) -> VectorView {
+    view_vector(read_vector_cpu(vector), write_vector_cpu(vector))
+}
+
+
+fn view_vector(read: MatrixReadFn, write: MatrixWriteFn) -> VectorView {
+    view_vector_offset(read, write, 0)
+}
+
+
+fn view_vector_offset(read: MatrixReadFn, write: MatrixWriteFn, 
+                      offset: Index) -> VectorView
+{
+    VectorView{
+        read:  |i|        read(i + offset + 1),
+        write: |i, value| write(i + offset + 1, value)
+    }
+}
+
+
+//-------------------------------------------------------------------
+fn rotation_view(read: MatrixReadFn, write: MatrixWriteFn, 
+                 length: Index) -> RotationView
+{
+    let vec = view_vector(read, write);
+    
+    let mut offset_upper  = 0;
+    let mut offset_middle = length + 1;
+    let mut offset_lower  = 2 * (length + 1);
+    
+    let rotate = || {
+        let temp = offset_upper;
+        offset_upper = offset_middle;
+        offset_middle = offset_lower;
+        offset_lower  = temp;
+    };
+
+    RotationView {
+        read_upper:   |i|    vec.read(i + offset_upper),
+        read_middle:  |i|    vec.read(i + offset_middle),
+        read_lower:   |i|    vec.read(i + offset_lower),
+        write_upper:  |i, v| vec.write(i + offset_upper, v),
+        write_middle: |i, v| vec.write(i + offset_middle, v),
+        write_lower:  |i, v| vec.write(i + offset_lower, v),
+        rotate:       rotate
+    }
+}
+

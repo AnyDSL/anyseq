@@ -1,52 +1,64 @@
-fn get_linmem_iteration_acc_device(column: Vector, row: Vector, corners: Vector) -> fn(Index, Index, Index, Index, bool, IterationInfo) -> ScoringMatrixAcc{
-
-    |offset_i, offset_j, height, width, _, it| -> ScoringMatrixAcc{
+//-----------------------------------------------------------------------------
+fn linmem_iter_view_device(col: Vector, row: Vector, corners: Vector) 
+    -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView
+{
+    |offset_i, offset_j, height, width, _, it| -> ScoresView{
         
         let block_j = offset_j / BLOCK_WIDTH;
 
-        let col_acc = get_vector_acc_offset(read_vector(column), write_vector(column), offset_i);
-        let row_acc = get_vector_acc_offset(read_vector(row), write_vector(row), offset_j);
-        let cor_acc = get_vector_acc(read_vector(corners), write_vector(corners));
+        let colv = view_vector_offset(read_vector(col), write_vector(col), offset_i);
+        let rowv = view_vector_offset(read_vector(row), write_vector(row), offset_j);
+        let corv = view_vector(read_vector(corners), write_vector(corners));
         
-        let mut no_gap_entry = cor_acc.read(block_j - 1);
+        let mut no_gap_entry = corv.read(block_j - 1);
         let mut gap_q_entry  = 0;
 
-        cor_acc.write(block_j - 1, col_acc.read(height - 1));
+        corv.write(block_j - 1, colv.read(height - 1));
 
-        ScoringMatrixAcc{
+        ScoresView {
             read_no_gap:       |_, _| no_gap_entry,
             read_gap_q:        |_, _| gap_q_entry,
-            read_gap_s:        |_, j| row_acc.read(j),
+            read_gap_s:        |_, j| rowv.read(j),
             write:             |_, j, score| {
-                no_gap_entry = row_acc.read(j);
+                no_gap_entry = rowv.read(j);
                 gap_q_entry  = score;
-                row_acc.write(j, score);
+                rowv.write(j, score);
             },
             update_begin_line: |i| {
-                gap_q_entry = col_acc.read(i);
+                gap_q_entry = colv.read(i);
             },
             update_end_line:   |i| {
-                no_gap_entry = col_acc.read(i);
-                col_acc.write(i, row_acc.read(width - 1));
+                no_gap_entry = colv.read(i);
+                colv.write(i, rowv.read(width - 1));
             },
             block_end:         || {}
         }
     }
 }
 
-fn get_local_max_vector_size_device(matrix_width: Index) -> Index { round_up_div(matrix_width, BLOCK_WIDTH) }
 
-fn get_local_linmem_iteration_acc_device(score_matrix: ScoringMatrix, max_scores: Vector, max_pos_i: Vector, max_pos_j: Vector) -> fn(Index, Index, Index, Index, bool, IterationInfo) -> ScoringMatrixAcc{
+//-----------------------------------------------------------------------------
+fn local_max_vector_size_device(matrix_width: Index) -> Index { 
+    ceil_div(matrix_width, BLOCK_WIDTH) 
+}
+
+
+//-----------------------------------------------------------------------------
+fn local_linmem_iter_view_device(
+    score_matrix: Scores, max_scores: Vector, 
+    max_pos_i: Vector, max_pos_j: Vector) 
+    -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView
+{
 
     |offset_i, offset_j, height, width, is_left_half, it| {
         
-        let mat_acc = score_matrix.get_iteration_acc(offset_i, offset_j, height, width, is_left_half, it);
+        let mat = score_matrix.iter_view(offset_i, offset_j, height, width, is_left_half, it);
 
         let mut max_score_block = SCORE_MIN_VALUE;
         let mut max_pos_block   = (0, 0);
 
         let write = |i, j, score| {
-            mat_acc.write(i, j, score);
+            mat.write(i, j, score);
             if score > max_score_block {
                 max_score_block = score;
                 max_pos_block = (i, j);
@@ -55,103 +67,107 @@ fn get_local_linmem_iteration_acc_device(score_matrix: ScoringMatrix, max_scores
     
         let block_end = || {
         
-            mat_acc.block_end();
+            mat.block_end();
 
-            let max_sco_acc   = get_vector_acc(read_vector(max_scores), write_vector(max_scores));
-            let max_pos_i_acc = get_vector_acc(read_vector(max_pos_i),  write_vector(max_pos_i) );
-            let max_pos_j_acc = get_vector_acc(read_vector(max_pos_j),  write_vector(max_pos_j) );
+            let max_score = view_vector(read_vector(max_scores), write_vector(max_scores));
+            let max_pos_i = view_vector(read_vector(max_pos_i),  write_vector(max_pos_i) );
+            let max_pos_j = view_vector(read_vector(max_pos_j),  write_vector(max_pos_j) );
 
-            let index = it.block_id;
+            let index = it.block_idx(1);
             
-            let prev_max = max_sco_acc.read(index);
+            let prev_max = max_score.read(index);
             
             if max_score_block > prev_max {
-                max_sco_acc.write(index, max_score_block);
-                max_pos_i_acc.write(index, max_pos_block(0) + offset_i);
-                max_pos_j_acc.write(index, max_pos_block(1) + offset_j);
+                max_score.write(index, max_score_block);
+                max_pos_i.write(index, max_pos_block(0) + offset_i);
+                max_pos_j.write(index, max_pos_block(1) + offset_j);
             }
         };
 
-        ScoringMatrixAcc{
-            read_no_gap:       mat_acc.read_no_gap,
-            read_gap_q:        mat_acc.read_gap_q,
-            read_gap_s:        mat_acc.read_gap_s,
+        ScoresView {
+            read_no_gap:       mat.read_no_gap,
+            read_gap_q:        mat.read_gap_q,
+            read_gap_s:        mat.read_gap_s,
             write:             write,
-            update_begin_line: mat_acc.update_begin_line,
-            update_end_line:   mat_acc.update_end_line,
+            update_begin_line: mat.update_begin_line,
+            update_end_line:   mat.update_end_line,
             block_end:         block_end
         }
     }
 }
 
-fn get_iteration_acc_hb_device(column_left: Vector, column_right: Vector, row: Vector, corners: Vector, block_width: Index) -> fn(Index, Index, Index, Index, bool, IterationInfo) -> ScoringMatrixAcc{
 
-    |offset_i, offset_j, height, width, is_left_half, it| -> ScoringMatrixAcc{
+//-----------------------------------------------------------------------------
+fn iter_view_hb_device(
+    column_left: Vector, column_right: Vector, 
+    row: Vector, corners: Vector, block_width: Index) 
+    -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView
+{
+    |offset_i, offset_j, height, width, is_left_half, it| -> ScoresView {
         
         let block_j = offset_j / block_width;
 
-        let column = if is_left_half { column_left } else { column_right };
+        let col = if is_left_half { column_left } else { column_right };
 
-        let col_acc = get_vector_acc_offset(read_vector(column), write_vector(column), offset_i);
-        let row_acc = get_vector_acc_offset(read_vector(row), write_vector(row), offset_j);
-        let cor_acc = get_vector_acc(read_vector(corners), write_vector(corners));
+        let colv = view_vector_offset(read_vector(col), write_vector(col), offset_i);
+        let rowv = view_vector_offset(read_vector(row), write_vector(row), offset_j);
+        let corv = view_vector(read_vector(corners), write_vector(corners));
         
-        let mut no_gap_entry = cor_acc.read(block_j - 1);
+        let mut no_gap_entry = corv.read(block_j - 1);
         let mut gap_q_entry  = 0;
 
-        cor_acc.write(block_j - 1, col_acc.read(height - 1));
+        corv.write(block_j - 1, colv.read(height - 1));
 
-        ScoringMatrixAcc{
+        ScoresView {
             read_no_gap:       |_, _| no_gap_entry,
             read_gap_q:        |_, _| gap_q_entry,
-            read_gap_s:        |_, j| row_acc.read(j),
+            read_gap_s:        |_, j| rowv.read(j),
             write:             |_, j, score| {
-                no_gap_entry = row_acc.read(j);
+                no_gap_entry = rowv.read(j);
                 gap_q_entry  = score;
-                row_acc.write(j, score);
+                rowv.write(j, score);
             },
             update_begin_line: |i| {
-                gap_q_entry = col_acc.read(i);
+                gap_q_entry = colv.read(i);
             },
             update_end_line:   |i| {
-                no_gap_entry = col_acc.read(i);
-                col_acc.write(i, row_acc.read(width - 1));
+                no_gap_entry = colv.read(i);
+                colv.write(i, rowv.read(width - 1));
             },
             block_end:         || {}
         }
     }
 }
 
-fn get_iteration_acc_tb_device(block_width: Index, init_scores: InitScoresFn) -> fn(Index, Index, Index, Index, bool, IterationInfo) -> ScoringMatrixAcc{
 
-    |offset_i, offset_j, _, width, _, it| -> ScoringMatrixAcc{
+//-----------------------------------------------------------------------------
+fn iter_view_tb_device(block_width: Index, init_scores: InitScoresFn) 
+    -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView
+{
+    |offset_i, offset_j, _, width, _, it| -> ScoresView{
                         
         let row = create_vector(width, 0, alloc_cpu);
-        let row_acc = get_vector_acc_cpu(row);
+        let rowv = view_vector_cpu(row);
 
         for i in range(-1, width){
-            row_acc.write(i, init_scores(i));
+            rowv.write(i, init_scores(i));
         }
         
         let mut no_gap_entry = init_scores(-1);
         let mut gap_q_entry  = 0;
 
-        ScoringMatrixAcc{
+        ScoresView {
             read_no_gap:       |_, _| no_gap_entry,
             read_gap_q:        |_, _| gap_q_entry,
-            read_gap_s:        |_, j| row_acc.read(j),
+            read_gap_s:        |_, j| rowv.read(j),
             write:             |_, j, score| {
-                no_gap_entry = row_acc.read(j);
+                no_gap_entry = rowv.read(j);
                 gap_q_entry  = score;
-                row_acc.write(j, score);
+                rowv.write(j, score);
             },
-            update_begin_line: |i| {
-                gap_q_entry = init_scores(i);
-            },
-            update_end_line:   |i| {
-                no_gap_entry = init_scores(i);
-            },
-            block_end:         || {}
+            update_begin_line: |i| { gap_q_entry = init_scores(i); },
+            update_end_line:   |i| { no_gap_entry = init_scores(i); },
+            block_end:         ||  {}
         }
     }
 

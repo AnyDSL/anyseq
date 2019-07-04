@@ -1,22 +1,23 @@
+// ----------------------------------------------------------------------------
 struct Scoring {
-    get_scoring_matrix:    fn() -> ScoringMatrix,
-    get_score:             fn() -> Score,
-    get_score_pos:         fn() -> (Index, Index),
-    get_left_half_scores:  fn() -> Vector,
-    get_right_half_scores: fn() -> Vector,
-    release:               fn() -> ()
+    matrix:            fn() -> Scores,
+    score:             fn() -> Score,
+    score_pos:         fn() -> IndexPair,
+    left_half_scores:  fn() -> Vector,
+    right_half_scores: fn() -> Vector,
+    release:           fn() -> ()
 }
 
-struct ScoringMatrix{
-    get_iteration_acc:     fn(Index, Index, Index, Index, bool, IterationInfo) -> ScoringMatrixAcc,
-    get_matrix:            fn() -> Matrix,
-    get_last_row:          fn() -> Vector,
-    get_last_column:       fn() -> Vector,
-    get_right_half_column: fn() -> Vector,
-    release:               fn() -> ()
+struct Scores {
+    iter_view:      fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView,
+    matrix:         fn() -> Matrix,
+    last_row:       fn() -> Vector,
+    last_col:       fn() -> Vector,
+    right_half_col: fn() -> Vector,
+    release:        fn() -> ()
 }
 
-struct ScoringMatrixAcc {
+struct ScoresView {
     read_no_gap:       fn(Index, Index) -> Score,
     read_gap_q:        fn(Index, Index) -> Score,
     read_gap_s:        fn(Index, Index) -> Score,
@@ -26,27 +27,34 @@ struct ScoringMatrixAcc {
     block_end:         fn() -> ()
 }
 
-fn get_global_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
 
-    let score_matrix = create_scoring_matrix_linmem(height, width, scheme.init_scores);
+// ----------------------------------------------------------------------------
+fn global_scoring_linmem(height: Index, width: Index, 
+                         scheme: AlignmentScheme) -> Scoring
+{
 
-    let get_score =     || get_vector_entry_cpu(score_matrix.get_last_column(), height - 1);
+    let smat = scoring_matrix_linmem(height, width, scheme.init_scores);
+
+    let get_score =     || vector_entry_cpu(smat.last_col(), height - 1);
     let get_score_pos = || (height - 1, width - 1);
 
-    create_scoring(score_matrix, get_score, get_score_pos)
+    scoring(smat, get_score, get_score_pos)
 }
 
-fn get_semiglobal_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
-    
-    let score_matrix = create_scoring_matrix_linmem(height, width, scheme.init_scores);
+
+// ----------------------------------------------------------------------------
+fn semiglobal_scoring_linmem(height: Index, width: Index, 
+                             scheme: AlignmentScheme) -> Scoring
+{
+    let smat = scoring_matrix_linmem(height, width, scheme.init_scores);
 
     let mut score = SCORE_MIN_VALUE;
     let mut pos   = (-1, -1);
     
     let find_score = || {
         
-        let last_row    = score_matrix.get_last_row();
-        let last_column = score_matrix.get_last_column();
+        let last_row    = smat.last_row();
+        let last_column = smat.last_col();
         
         let (row_score, row_index) = reduce_max(last_row, -1, last_row.length + 1);
 
@@ -73,28 +81,31 @@ fn get_semiglobal_scoring_linmem(height: Index, width: Index, scheme: AlignmentS
         pos
     };
 
-    create_scoring(score_matrix, get_score, get_score_pos)
+    scoring(smat, get_score, get_score_pos)
 }
 
-fn get_local_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
+
+// ----------------------------------------------------------------------------
+fn local_scoring_linmem(height: Index, width: Index,
+                        scheme: AlignmentScheme) -> Scoring 
+{
+    let smat = scoring_matrix_linmem(height, width, scheme.init_scores);
     
-    let score_matrix = create_scoring_matrix_linmem(height, width, scheme.init_scores);
-    
-    let max_scores = create_vector(get_local_max_vector_size_device(width), get_padding_w(), alloc_device);
+    let max_scores = create_vector(local_max_vector_size_device(width), padding_w(), alloc_device);
     let max_pos_i  = alloc_vector(max_scores, alloc_device);
     let max_pos_j  = alloc_vector(max_scores, alloc_device);
 
-    for i, sco_acc in iteration_vector_1d(max_scores, max_scores.length){
-        sco_acc.write(i, SCORE_MIN_VALUE);
+    for i, sco in iteration_vector_1d(max_scores, max_scores.length) {
+        sco.write(i, SCORE_MIN_VALUE);
     }
 
-    let local_score_matrix = ScoringMatrix{
-        get_iteration_acc:     get_local_linmem_iteration_acc_device(score_matrix, max_scores, max_pos_i, max_pos_j),
-        get_matrix:            score_matrix.get_matrix,
-        get_last_row:          score_matrix.get_last_row,
-        get_last_column:       score_matrix.get_last_column,
-        get_right_half_column: score_matrix.get_last_column,
-        release:               score_matrix.release
+    let local_score_matrix = Scores {
+        iter_view:      local_linmem_iter_view_device(smat, max_scores, max_pos_i, max_pos_j),
+        matrix:         smat.matrix,
+        last_row:       smat.last_row,
+        last_col:       smat.last_col,
+        right_half_col: smat.last_col,
+        release:        smat.release
      };
 
     let mut score = SCORE_MIN_VALUE;
@@ -104,8 +115,8 @@ fn get_local_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme
         let (sco, index) = reduce_max(max_scores, 0, max_scores.length);
 
         score = sco;
-        let pos_i = get_vector_entry_cpu(max_pos_i, index);
-        let pos_j = get_vector_entry_cpu(max_pos_j, index);
+        let pos_i = vector_entry_cpu(max_pos_i, index);
+        let pos_j = vector_entry_cpu(max_pos_j, index);
         pos = (pos_i, pos_j);
     };
 
@@ -127,118 +138,151 @@ fn get_local_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme
     };
 
     Scoring{
-        get_scoring_matrix:   || local_score_matrix,
-        get_score:               get_score,
-        get_score_pos:           get_score_pos,
-        get_left_half_scores:    local_score_matrix.get_last_column,
-        get_right_half_scores:   local_score_matrix.get_right_half_column,
-        release:                 release
+        matrix:             || local_score_matrix,
+        score:              get_score,
+        score_pos:          get_score_pos,
+        left_half_scores:   local_score_matrix.last_col,
+        right_half_scores:  local_score_matrix.right_half_col,
+        release:            release
     }
 }
 
 
-fn get_global_scoring_full_matrix(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
 
-    let score_matrix = create_scoring_matrix_full(height, width, scheme.init_scores);
+
+// ----------------------------------------------------------------------------
+// not to be used directly
+// ----------------------------------------------------------------------------
+fn scoring(smat: Scores, 
+           get_score: fn() -> Score, 
+           get_score_pos: fn() -> IndexPair) -> Scoring
+{
+    Scoring {
+        matrix:             || smat,
+        score:              get_score,
+        score_pos:          get_score_pos,
+        left_half_scores:   smat.last_col,
+        right_half_scores:  smat.right_half_col,
+        release:            smat.release
+    }
+}
+
+
+// ----------------------------------------------------------------------------
+fn full_scoring_matrix(height: Index, width: Index, 
+                       scheme: AlignmentScheme) -> Scoring
+{
+    let smat = scoring_matrix_full(height, width, scheme.init_scores);
     
-    let get_score =     || get_matrix_entry_cpu(score_matrix.get_matrix(), height - 1, width - 1);
+    let get_score =     || matrix_entry_cpu(smat.matrix(), height - 1, width - 1);
     let get_score_pos = || (height - 1, width - 1);
 
-    create_scoring(score_matrix, get_score, get_score_pos)
-}
-
-fn get_scoring_hb_linmem(height: Index, width: Index, part_size: Index, block_width: Index, splits: Splits, scheme: AlignmentScheme) -> Scoring{
-
-    let score_matrix = create_scoring_hb_matrix_linmem(height, width, part_size, block_width, splits, scheme.init_scores);
-    create_scoring(score_matrix, || SCORE_MIN_VALUE, || (-1, -1))
-}
-
-fn get_scoring_hb_blockwise_linmem(block_width: Index, scheme: AlignmentScheme) -> Scoring {
-
-    let score_matrix = create_scoring_tb_matrix(scheme.init_scores, block_width);
-    create_scoring(score_matrix, || SCORE_MIN_VALUE, || (-1, -1))
-
+    scoring(smat, get_score, get_score_pos)
 }
 
 
-fn create_scoring(score_matrix: ScoringMatrix, get_score: fn() -> Score, get_score_pos: fn() -> (Index, Index)) -> Scoring{
-    Scoring{
-        get_scoring_matrix:   || score_matrix,
-        get_score:               get_score,
-        get_score_pos:           get_score_pos,
-        get_left_half_scores:    score_matrix.get_last_column,
-        get_right_half_scores:   score_matrix.get_right_half_column,
-        release:                 score_matrix.release
+// ----------------------------------------------------------------------------
+fn scoring_linmem_tb(height: Index, width: Index, 
+                     part_size: Index, block_width: 
+                     Index, splits: Splits, 
+                     scheme: AlignmentScheme) -> Scoring
+{
+    let smat = scoring_matrix_linmem_tb(height, width, part_size, 
+                                        block_width, splits, 
+                                        scheme.init_scores);
+
+    scoring(smat, || SCORE_MIN_VALUE, || (-1, -1))
+}
+
+
+// ----------------------------------------------------------------------------
+fn scoring_linmem_tb_blockwise(block_width: Index, 
+                               scheme: AlignmentScheme) -> Scoring 
+{
+    let smat = scoring_matrix_linmem_tb_blockwise(scheme.init_scores, block_width);
+
+    scoring(smat, || SCORE_MIN_VALUE, || (-1, -1))
+}
+
+
+
+
+// ----------------------------------------------------------------------------
+fn scoring_matrix_full(height: Index, width: Index, init_scores: InitScoresFn) -> Scores 
+{
+    let smat = create_matrix(height, width, padding_h(), padding_w(), alloc_device);
+
+    // initialize scoring matrix
+    for i, m in iteration_matrix_1d(smat, smat.height + 1){ 
+        m.write(i-1,  -1, init_scores(i-1)); 
     }
-}
+    for i, m in iteration_matrix_1d(smat, smat.width  + 1){ 
+        m.write( -1, i-1, init_scores(i-1)); 
+    }
 
-fn create_scoring_matrix_full(height: Index, width: Index, init_scores: InitScoresFn) -> ScoringMatrix{
-    
-    let matrix = create_matrix(height, width, get_padding_h(), get_padding_w(), alloc_device);
+    let iter_view = |offset_i: Index, offset_j: Index, _: Index, _: Index, _: bool, it: IterContext| 
+        -> ScoresView
+    {
+        let m = view_matrix_offset(smat, read_matrix(smat), write_matrix(smat), offset_i, offset_j);
 
-    //initialize matrix
-    for i, mat_acc in iteration_matrix_1d(matrix, matrix.height + 1){ mat_acc.write(i-1,  -1, init_scores(i-1)); }
-    for i, mat_acc in iteration_matrix_1d(matrix, matrix.width  + 1){ mat_acc.write( -1, i-1, init_scores(i-1)); }
-
-    let get_iteration_acc = |offset_i: Index, offset_j: Index, _: Index, _: Index, _: bool, it: IterationInfo| -> ScoringMatrixAcc{
-
-        let mat_acc = make_matrix_acc_offset(matrix, read_matrix(matrix), write_matrix(matrix), offset_i, offset_j);
-
-        ScoringMatrixAcc{
-            read_no_gap:       |i, j| mat_acc.read(i-1, j-1),
-            read_gap_q:        |i, j| mat_acc.read(i  , j-1),
-            read_gap_s:        |i, j| mat_acc.read(i-1, j  ),
-            write:             |i, j, val| mat_acc.write(i, j, val),
-            update_begin_line: |_| {},
-            update_end_line:   |_| {},
-            block_end:         || {}
+        ScoresView {
+            read_no_gap:        |i, j| m.read(i-1, j-1),
+            read_gap_q:         |i, j| m.read(i  , j-1),
+            read_gap_s:         |i, j| m.read(i-1, j  ),
+            write:              |i, j, val| m.write(i, j, val),
+            update_begin_line:  |_| {},
+            update_end_line:    |_| {},
+            block_end:          || {}
         }
     };
 
-    let get_last_column = || -> Vector{
-        let col = create_vector(matrix.height, get_padding_w(), alloc_device);
+    let last_col = || -> Vector {
+        let col = create_vector(smat.height, padding_w(), alloc_device);
         col
     };
 
     let release = || -> () {
-        release(matrix.buf);
+        release(smat.buf);
     };
 
-    ScoringMatrix{
-        get_iteration_acc:       get_iteration_acc,
-        get_matrix:           || matrix,
-        get_last_row:            get_last_column, //TODO
-        get_last_column:         get_last_column,
-        get_right_half_column:   get_last_column,
-        release:                 release
+    Scores {
+        iter_view:       iter_view,
+        matrix:          || smat,
+        last_row:        last_col,
+        last_col:        last_col,
+        right_half_col:  last_col,
+        release:         release
     }
 
 }
 
-fn create_scoring_matrix_linmem(height: Index, width: Index, init_scores: InitScoresFn) -> ScoringMatrix{
 
-    let column  = create_vector(height, get_padding_h(), alloc_device);
-    let row     = create_vector(width, get_padding_w(), alloc_device);
-    let corners = create_vector(round_up_div(width, BLOCK_WIDTH) - 1, get_padding_w(), alloc_device);
+// ----------------------------------------------------------------------------
+fn scoring_matrix_linmem(height: Index, width: Index, init_scores: InitScoresFn) 
+    -> Scores
+{
+    let column  = create_vector(height, padding_h(), alloc_device);
+    let row     = create_vector(width, padding_w(), alloc_device);
+    let corners = create_vector(ceil_div(width, BLOCK_WIDTH) - 1, padding_w(), alloc_device);
 
-    for i, col_acc in iteration_vector_1d(column, column.length + 1){
+    for i, c in iteration_vector_1d(column, column.length + 1){
         if i == 0 {
-            col_acc.write(-1, init_scores(width - 1));
+            c.write(-1, init_scores(width - 1));
         }else{
-            col_acc.write(i-1, init_scores(i-1));
+            c.write(i-1, init_scores(i-1));
         }
     }
 
-    for i, row_acc in iteration_vector_1d(row, row.length + 1){
+    for i, r in iteration_vector_1d(row, row.length + 1){
         if i == 0 {
-            row_acc.write(-1, init_scores(height - 1)); 
+            r.write(-1, init_scores(height - 1)); 
         }else{
-            row_acc.write(i-1, init_scores(i-1));
+            r.write(i-1, init_scores(i-1));
         }
     }
 
-    for i, cor_acc in iteration_vector_1d(corners, corners.length + 1){
-        cor_acc.write(i-1, init_scores(i * BLOCK_WIDTH - 1));
+    for i, cor in iteration_vector_1d(corners, corners.length + 1){
+        cor.write(i-1, init_scores(i * BLOCK_WIDTH - 1));
     }
 
     let release = || -> () {
@@ -247,82 +291,89 @@ fn create_scoring_matrix_linmem(height: Index, width: Index, init_scores: InitSc
         release(corners.buf);
     };
 
-    ScoringMatrix{
-        get_iteration_acc:        get_linmem_iteration_acc_device(column, row, corners),
-        get_matrix:            || create_matrix(0, 0, 0, 0, alloc_device), //not supported with linmem matrix
-        get_last_row:          || row,
-        get_last_column:       || column,
-        get_right_half_column: || column,
-        release:                  release    
+    Scores {
+        iter_view:       linmem_iter_view_device(column, row, corners),
+        matrix:          || create_matrix(0, 0, 0, 0, alloc_device), // not supported with linmem matrix
+        last_row:        || row,
+        last_col:        || column,
+        right_half_col:  || column,
+        release:         release    
     }
 
 }
 
-fn create_scoring_hb_matrix_linmem(height: Index, width: Index, part_size: Index, block_width: Index, splits: Splits, init_scores: InitScoresFn) -> ScoringMatrix{
 
-    let num_blocks_j = round_up_div(width, block_width);
+// ----------------------------------------------------------------------------
+fn scoring_matrix_linmem_tb(height: Index, width: Index, 
+                            part_size: Index, block_width: Index, 
+                            splits: Splits, 
+                            init_scores: InitScoresFn) -> Scores
+{
+    let num_blocks_j = ceil_div(width, block_width);
 
-    let column_left  = create_vector(height, get_padding_h(), alloc_device);
-    let column_right = create_vector(height, get_padding_h(), alloc_device);
-    let row          = create_vector(width, get_padding_w(), alloc_device);
-    let corners      = create_vector(num_blocks_j - 1, get_padding_w(), alloc_device);
+    let col_left  = create_vector(height, padding_h(), alloc_device);
+    let col_right = create_vector(height, padding_h(), alloc_device);
+    let row       = create_vector(width, padding_w(), alloc_device);
+    let corners   = create_vector(num_blocks_j - 1, padding_w(), alloc_device);
 
     let blocks_per_part = part_size / block_width;
 
-    for b in iteration_1d(num_blocks_j){
+    for b in iteration_1d(num_blocks_j) {
         if b < num_blocks_j {
-
-            let col_lef_acc = get_vector_acc(read_vector(column_left), write_vector(column_left));
-            let col_rig_acc = get_vector_acc(read_vector(column_right), write_vector(column_right));
+            let lcol = view_vector(read_vector(col_left), write_vector(col_left));
+            let rcol = view_vector(read_vector(col_right), write_vector(col_right));
 
             let part  = b / blocks_per_part;
             let block = b % blocks_per_part;
 
-            let (offset_i, part_height) = splits.get_part_dimensions(part);
+            let (offset_i, part_height) = splits.part_dimensions(part);
 
             let part_blocks = min(blocks_per_part, num_blocks_j - part * blocks_per_part);
             for i in range_step(block, part_height, part_blocks){
-                col_lef_acc.write(offset_i + i, init_scores(i));
-                col_rig_acc.write(offset_i + i, init_scores(i));
+                lcol.write(offset_i + i, init_scores(i));
+                rcol.write(offset_i + i, init_scores(i));
             }
         }
     }
 
     let half_size = part_size / 2;
 
-    for i, row_acc in iteration_vector_1d(row, row.length){
-        row_acc.write(i, init_scores(i % half_size));
+    for i, r in iteration_vector_1d(row, row.length){
+        r.write(i, init_scores(i % half_size));
     }
 
-    for i, cor_acc in iteration_vector_1d(corners, corners.length + 1){
-        cor_acc.write(i-1, init_scores((i * block_width) % half_size - 1));
+    for i, cor in iteration_vector_1d(corners, corners.length + 1){
+        cor.write(i-1, init_scores((i * block_width) % half_size - 1));
     }
 
     let release = || -> () {
-        release(column_left.buf);
-        release(column_right.buf);
+        release(col_left.buf);
+        release(col_right.buf);
         release(row.buf);
         release(corners.buf);
     };
 
-    ScoringMatrix{
-        get_iteration_acc:        get_iteration_acc_hb_device(column_left, column_right, row, corners, block_width),
-        get_matrix:            || create_matrix(0, 0, 0, 0, alloc_device), //not supported with linmem matrix
-        get_last_row:          || row,
-        get_last_column:       || column_left,
-        get_right_half_column: || column_right,
-        release:                  release
+    Scores {
+        iter_view:       iter_view_hb_device(col_left, col_right, row, corners, block_width),
+        matrix:          || create_matrix(0, 0, 0, 0, alloc_device), // not supported with linmem matrix
+        last_row:        || row,
+        last_col:        || col_left,
+        right_half_col:  || col_right,
+        release:         release
     }
 
 }
 
-fn create_scoring_tb_matrix(init_scores: InitScoresFn, block_width: Index) -> ScoringMatrix{
-    ScoringMatrix{
-        get_iteration_acc:        get_iteration_acc_tb_device(block_width, init_scores),
-        get_matrix:            || create_matrix(0, 0, 0, 0, alloc_device), //not supported
-        get_last_row:          || create_vector(0, 0, alloc_device),       //not supported
-        get_last_column:       || create_vector(0, 0, alloc_device),       //not supported
-        get_right_half_column: || create_vector(0, 0, alloc_device),       //not supported
-        release:               || {}
+
+// ----------------------------------------------------------------------------
+fn scoring_matrix_linmem_tb_blockwise(init_scores: InitScoresFn, block_width: Index) -> Scores{
+    Scores {
+        iter_view:       iter_view_tb_device(block_width, init_scores),
+        matrix:          || create_matrix(0, 0, 0, 0, alloc_device), // not supported
+        last_row:        || create_vector(0, 0, alloc_device),       // not supported
+        last_col:        || create_vector(0, 0, alloc_device),       // not supported
+        right_half_col:  || create_vector(0, 0, alloc_device),       // not supported
+        release:         || {}
     }
 }
+

@@ -9,7 +9,6 @@ fn @is_avx() -> bool { false }
 fn @is_avx2() -> bool { false }
 
 fn @get_vector_length() -> i32 { 1 }
-fn @get_alignment() -> i32 { 4 }
 fn @get_thread_count() -> i32 { 4 }
 
 fn @outer_loop(lower: i32, upper: i32, body: fn(i32) -> ()) -> () {

@@ -1,0 +1,40 @@
+//-----------------------------------------------------------------------------
+type IndexFn  = fn(Index) -> ();
+type Schedule = fn(Index, IndexFn) -> ();
+
+
+//----------------------------------------------------------------------------
+fn @inter_block_loop(scores: ScoresView, size: IndexPair, 
+                     body: fn(Index,Index) -> () ) -> () 
+{
+    for i in unroll(0, size(0)) {
+        scores.update_begin_line(i);
+
+        for j in unroll(0, size(1)){
+            @@body(i,j);
+        }
+        scores.update_end_line(i);
+
+    }
+    scores.block_end();
+}
+
+
+//-------------------------------------------------------------------
+fn @sequential_schedule(n: Index, body: IndexFn) -> () 
+{
+    for i in range(0 as Index, n) {
+        @@body(i);
+    }
+}
+
+
+//-------------------------------------------------------------------
+fn @parallel_schedule(n: Index, body: IndexFn) -> () 
+{
+    // for i in parallel(get_thread_count(), 0i32 as Index, n as i32) {
+    for i in parallel(0i32, 0i32, n as i32) {
+        @@body(i as Index);
+    }
+}
+

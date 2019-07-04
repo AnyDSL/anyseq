@@ -1,0 +1,81 @@
+static mut TOTAL_KERNEL_TIMING = 0i64;
+static mut TOTAL_CPU_TIMING    = 0i64;
+static mut START_TIME = 0i64;
+
+
+//-----------------------------------------------------------------------------
+static ITER_ACC =  1;
+static ITER_CPU = 1;
+
+fn @benchmark_acc(acc: Accelerator, body: fn() -> ()) -> () { 
+    TOTAL_KERNEL_TIMING += benchmark(get_kernel_time, ITER_ACC, body, acc.sync) 
+}
+
+fn @benchmark_cpu( body: fn() -> ()) -> () { 
+    TOTAL_CPU_TIMING    += benchmark(get_micro_time,  ITER_CPU, body, ||) 
+}
+
+
+//-----------------------------------------------------------------------------
+fn @benchmark(get_time: fn() -> i64, num_iter: i32,
+              body: fn() -> (), sync: fn() -> ()) -> i64
+{
+    0 as i64
+}
+
+
+//-----------------------------------------------------------------------------
+// fn @benchmark(get_time: fn() -> i64, num_iter: i32, 
+//               body: fn() -> (), 
+//               sync: fn() -> ()) -> i64
+// {
+//     let times_buf = alloc_cpu(num_iter * sizeof[i64]());
+//     let times = bitcast[&mut[i64]](times_buf.data);
+//     for i in range(0, num_iter) {
+//         let start = get_time();
+//         body();
+//         sync();
+//         times(i) = get_time() - start;
+//     }
+//
+//     sort_i64(num_iter, times);
+//
+//     print_string("Timing: ");
+//     print_f64(times(num_iter/2) as f64 / 1000.0);
+//     print_string(" | ");
+//     print_f64(times(0) as f64 / 1000.0);
+//     print_string(" | ");
+//     print_f64(times(num_iter-1) as f64 / 1000.0);
+//     print_string(" (median(");
+//     print_i32(num_iter);
+//     print_string(") | minimum | maximum) ms\n");
+//
+//     let median = times(num_iter/2);
+//     release(times_buf);
+//     median
+// }
+
+
+//-----------------------------------------------------------------------------
+fn timer_start() -> (){
+    START_TIME = get_micro_time()
+}
+
+fn timer_stop() -> (){
+    let time = get_micro_time() - START_TIME;
+    print_string("Timer: ");
+    print_f64(time as f64 / 1000.0);
+    print_string("\n");
+}
+
+
+
+//-----------------------------------------------------------------------------
+fn print_total_timing() -> () {
+    print_string("Total timing for cpu / kernel: ");
+    print_f64(TOTAL_CPU_TIMING as f64 / 1000.0);
+    print_string(" / ");
+    print_f64(TOTAL_KERNEL_TIMING as f64 / 1000.0);
+    print_string(" ms\n")
+}
+

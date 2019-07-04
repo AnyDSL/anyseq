@@ -4,7 +4,7 @@
 #include <string>
 #include <iosfwd>
 
-#include "datatypes.h"
+#include "config.h"
 
 
 namespace anyseq {
