@@ -1,13 +1,13 @@
 fn get_linmem_iteration_acc_device(column: Vector, row: Vector, corners: Vector) -> fn(Index, Index, Index, Index, bool, IterationInfo) -> ScoringMatrixAcc{
 
     |offset_i, offset_j, height, width, _, it| -> ScoringMatrixAcc{
-        
+
         let block_j = offset_j / BLOCK_WIDTH;
 
         let col_acc = get_vector_acc_offset(read_vector(column), write_vector(column), offset_i);
         let row_acc = get_vector_acc_offset(read_vector(row), write_vector(row), offset_j);
         let cor_acc = get_vector_acc(read_vector(corners), write_vector(corners));
-        
+
         let mut no_gap_entry = cor_acc.read(block_j - 1);
         let mut gap_q_entry  = 0;
 
@@ -39,7 +39,7 @@ fn get_local_max_vector_size_device(matrix_width: Index) -> Index { round_up_div
 fn get_local_linmem_iteration_acc_device(score_matrix: ScoringMatrix, max_scores: Vector, max_pos_i: Vector, max_pos_j: Vector) -> fn(Index, Index, Index, Index, bool, IterationInfo) -> ScoringMatrixAcc{
 
     |offset_i, offset_j, height, width, is_left_half, it| {
-        
+
         let mat_acc = score_matrix.get_iteration_acc(offset_i, offset_j, height, width, is_left_half, it);
 
         let mut max_score_block = SCORE_MIN_VALUE;
@@ -52,9 +52,9 @@ fn get_local_linmem_iteration_acc_device(score_matrix: ScoringMatrix, max_scores
                 max_pos_block = (i, j);
             }
         };
-    
+
         let block_end = || {
-        
+
             mat_acc.block_end();
 
             let max_sco_acc   = get_vector_acc(read_vector(max_scores), write_vector(max_scores));
@@ -62,9 +62,9 @@ fn get_local_linmem_iteration_acc_device(score_matrix: ScoringMatrix, max_scores
             let max_pos_j_acc = get_vector_acc(read_vector(max_pos_j),  write_vector(max_pos_j) );
 
             let index = it.block_id;
-            
+
             let prev_max = max_sco_acc.read(index);
-            
+
             if max_score_block > prev_max {
                 max_sco_acc.write(index, max_score_block);
                 max_pos_i_acc.write(index, max_pos_block(0) + offset_i);
@@ -87,7 +87,7 @@ fn get_local_linmem_iteration_acc_device(score_matrix: ScoringMatrix, max_scores
 fn get_iteration_acc_hb_device(column_left: Vector, column_right: Vector, row: Vector, corners: Vector, block_width: Index) -> fn(Index, Index, Index, Index, bool, IterationInfo) -> ScoringMatrixAcc{
 
     |offset_i, offset_j, height, width, is_left_half, it| -> ScoringMatrixAcc{
-        
+
         let block_j = offset_j / block_width;
 
         let column = if is_left_half { column_left } else { column_right };
@@ -95,7 +95,7 @@ fn get_iteration_acc_hb_device(column_left: Vector, column_right: Vector, row: V
         let col_acc = get_vector_acc_offset(read_vector(column), write_vector(column), offset_i);
         let row_acc = get_vector_acc_offset(read_vector(row), write_vector(row), offset_j);
         let cor_acc = get_vector_acc(read_vector(corners), write_vector(corners));
-        
+
         let mut no_gap_entry = cor_acc.read(block_j - 1);
         let mut gap_q_entry  = 0;
 
@@ -125,14 +125,14 @@ fn get_iteration_acc_hb_device(column_left: Vector, column_right: Vector, row: V
 fn get_iteration_acc_tb_device(block_width: Index, init_scores: InitScoresFn) -> fn(Index, Index, Index, Index, bool, IterationInfo) -> ScoringMatrixAcc{
 
     |offset_i, offset_j, _, width, _, it| -> ScoringMatrixAcc{
-                        
+
         let row = create_vector(width, 0, alloc_cpu);
         let row_acc = get_vector_acc_cpu(row);
 
         for i in range(-1, width){
             row_acc.write(i, init_scores(i));
         }
-        
+
         let mut no_gap_entry = init_scores(-1);
         let mut gap_q_entry  = 0;
 

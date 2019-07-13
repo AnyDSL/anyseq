@@ -11,7 +11,7 @@
 #include "import.h"         //AnySeq C interface
 #include "alignment_io.h"
 #include "sequence_io.h"
-#include "timer.h"  
+#include "timer.h"
 #include "clipp.h"          //command line args handling
 
 
@@ -21,7 +21,7 @@ using namespace anyseq;
 //-------------------------------------------------------------------
 template<class Function>
 void benchmark_align(const std::string& name,
-               Function&& align, 
+               Function&& align,
                const std::string& q, const std::string& s,
                std::string& alq, std::string& als,
                std::ostream& os)
@@ -42,7 +42,7 @@ void benchmark_align(const std::string& name,
 //-------------------------------------------------------------------
 template<class Function>
 void benchmark_score(const std::string& name,
-               Function&& align, 
+               Function&& align,
                const std::string& q, const std::string& s,
                std::ostream& os)
 {
@@ -60,9 +60,11 @@ void benchmark_score(const std::string& name,
 void benchmark_alignments(const std::string& q, const std::string& s,
                           std::ostream& os)
 {
-    benchmark_score("global score", 
+    benchmark_score("global score",
         global_alignment_score, q, s, os);
 
+    //TODO
+    /*
     benchmark_score("semiglobal score",
         semiglobal_alignment_score, q, s, os);
 
@@ -75,7 +77,7 @@ void benchmark_alignments(const std::string& q, const std::string& s,
     std::string alq; alq.resize(alen, ' ');
     std::string als; als.resize(alen, ' ');
 
-    benchmark_align("global alignment", 
+    benchmark_align("global alignment",
         construct_global_alignment, q, s, alq, als, os);
 
     benchmark_align("semiglobal alignment",
@@ -83,6 +85,7 @@ void benchmark_alignments(const std::string& q, const std::string& s,
 
     benchmark_align("local alignment",
         construct_local_alignment, q, s, alq, als, os);
+    */
 }
 
 
@@ -121,7 +124,7 @@ std::string random_string(std::size_t minlen, std::size_t maxlen, URNG& urng)
 
 
 //-------------------------------------------------------------------
-int main(int argc, char* argv[]) 
+int main(int argc, char* argv[])
 {
     using namespace clipp;
     using std::cout;
@@ -138,25 +141,25 @@ int main(int argc, char* argv[])
     std::vector<std::string> wrong;
 
     auto cli = (
-        // (option("-o", "--out").set(output,omode::file) & 
+        // (option("-o", "--out").set(output,omode::file) &
         //  value("file", outfile)) % "write results to file"
         // ,
         "read sequences from input files" % (
             command("-i", "--in"),
             value("query file", query),
             value("subject file", subject)
-        ) | 
+        ) |
         // "specify sequences on the command line" % (
         //     command("-a", "--args").set(input,imode::args),
         //     value("query string", query),
         //     value("subject string", subject)
-        // ) | 
+        // ) |
         "generate random input sequences" % (
             command("-r", "--rand").set(input,imode::random),
             opt_integer("min len", minlen) &
             opt_integer("max len", maxlen)
         ),
-        // | ( 
+        // | (
         // "read sequences from stdin" %
         //     command("-").set(input,imode::stdio)
         // )
@@ -173,12 +176,15 @@ int main(int argc, char* argv[])
         return 0;
     }
 
+    //init MPI
+    comm_init();
+
     switch(input) {
         default:
         case imode::file:
             cout << "input sequences: " << query << ", " << subject << endl;
             try {
-                //only use first sequence from each input files 
+                //only use first sequence from each input files
                 auto qreader = make_sequence_reader(query);
                 if(qreader->has_next()) {
                     query = std::move(qreader->next().data);
@@ -187,7 +193,7 @@ int main(int argc, char* argv[])
                 if(sreader->has_next()) {
                     subject = std::move(sreader->next().data);
                 }
-            } 
+            }
             catch(std::exception& e) {
                 std::cerr << e.what();
             }
@@ -215,7 +221,7 @@ int main(int argc, char* argv[])
 
     switch(output) {
         default:
-        case omode::stdio:             
+        case omode::stdio:
             benchmark_alignments(query, subject, cout);
             break;
         case omode::file: {
@@ -232,5 +238,6 @@ int main(int argc, char* argv[])
             }
         }
     }
-}
 
+    comm_finish();
+}

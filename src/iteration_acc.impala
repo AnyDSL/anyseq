@@ -13,29 +13,36 @@ fn get_iteration_info(bid_x: Index, tid_x: Index) -> IterationInfo {
     }
 }
 
+//placeholder (needed for mpi calculation)
+static mut last_non_empty_rank = 0;
+static mut first_local_row = 0;
+static mut last_local_row = 0; //excl.
+
 fn @iteration(query_gpu: Sequence, subject_gpu: Sequence, scores: ScoringMatrix, predc: PredecessorMatrix, body: RelaxationBody) -> () {
-    
+
     let acc = accelerator(device_id);
 
     let num_blocks_i = round_up_div(query_gpu.length, BLOCK_HEIGHT);
     let num_blocks_j = round_up_div(subject_gpu.length, BLOCK_WIDTH);
     let max_blocks = min(num_blocks_i, num_blocks_j);
     let block_diags = num_blocks_i + num_blocks_j - 1;
-    
+
+    last_local_row = query_gpu.length;
+
     let block = (BLOCK_WIDTH, 1, 1);
 
     for benchmark_acc(acc){
-        
+
         //iterate over diagonals of blocks
         for block_dia_i in range(0, block_diags){
-        
+
             let num_blocks = min3(block_dia_i + 1, max_blocks, block_diags - block_dia_i);
-        
+
             let grid  = (num_blocks * BLOCK_WIDTH, 1, 1);
-            
+
             //execute kernel for each diagonal
             for tid, bid, bdim, gdim, gid in acc.exec(grid, block) {
-                
+
                 let (tidx,  _,  _) = tid;
                 let (bidx,  _,  _) = bid;
 
@@ -56,8 +63,8 @@ fn @iteration(query_gpu: Sequence, subject_gpu: Sequence, scores: ScoringMatrix,
                 let que_acc = sequence_to_shared(tid_x, query_gpu, BLOCK_HEIGHT, que_acc_gl);
                 let sub_acc = sequence_to_shared(tid_x, subject_gpu, BLOCK_WIDTH, sub_acc_gl);
 
-                let sco_acc = scores.get_iteration_acc(offset_i, offset_j, height, width, false, get_iteration_info(block_dia_j, tid_x)); 
-                let pre_acc = predc.get_iteration_acc(offset_i, offset_j, height, width, get_iteration_info(block_dia_j, tid_x));      
+                let sco_acc = scores.get_iteration_acc(offset_i, offset_j, height, width, false, get_iteration_info(block_dia_j, tid_x));
+                let pre_acc = predc.get_iteration_acc(offset_i, offset_j, height, width, get_iteration_info(block_dia_j, tid_x));
 
                 let diags = BLOCK_WIDTH + BLOCK_HEIGHT - 1;
 
@@ -70,7 +77,7 @@ fn @iteration(query_gpu: Sequence, subject_gpu: Sequence, scores: ScoringMatrix,
                     let i = dia_i - j;
 
                     sco_acc.update_begin_line(i);
-                    
+
                     if i >= 0 && i < BLOCK_HEIGHT {
                         body(i, j, que_acc, sub_acc, sco_acc, pre_acc);
                     }
@@ -85,7 +92,7 @@ fn @iteration(query_gpu: Sequence, subject_gpu: Sequence, scores: ScoringMatrix,
 }
 
 fn iteration_partitioned(half_size: Index, num_halfs: Index, block_width: Index, splits: Splits, max_part_height: Index) -> IterationFn{
-    
+
     |query, subject, scores, predc, body| {
 
         let acc = accelerator(device_id);
@@ -98,7 +105,7 @@ fn iteration_partitioned(half_size: Index, num_halfs: Index, block_width: Index,
         let half_max_blocks = min(half_num_blocks_i, half_num_blocks_j);
         //amount of antidiagonals in a half
         let block_diags = half_num_blocks_i + half_num_blocks_j - 1;
-    
+
         let block = (BLOCK_WIDTH, 1, 1);
 
         for benchmark_acc(acc){
@@ -107,10 +114,10 @@ fn iteration_partitioned(half_size: Index, num_halfs: Index, block_width: Index,
 
                 let half_num_blocks = min3(block_dia_i + 1, half_max_blocks, block_diags - block_dia_i);
                 let grid  = (half_num_blocks * num_halfs * BLOCK_WIDTH, 1, 1);
-            
+
                 //execute kernel for each diagonal
                 for tid, bid, bdim, gdim, gid in acc.exec(grid, block) {
-                
+
                     let (tidx,  _,  _) = tid;
                     let (bidx,  _,  _) = bid;
 
@@ -123,7 +130,7 @@ fn iteration_partitioned(half_size: Index, num_halfs: Index, block_width: Index,
                     let half_block_dia_j = block_dia_j % half_num_blocks;
                     let half_block_i = min(block_dia_i, half_num_blocks_i - 1) - half_block_dia_j;
                     let half_block_j = max(block_dia_i - half_num_blocks_i + 1, 0) + half_block_dia_j;
-                
+
                     let half_offset_j = half_index * half_size;
                     let (half_offset_i, half_height) = splits.get_part_dimensions(half_index / 2);
 
@@ -140,11 +147,11 @@ fn iteration_partitioned(half_size: Index, num_halfs: Index, block_width: Index,
                         let que_acc = get_sequence_acc_half(query, half_offset_i, half_height, half_block_i, BLOCK_HEIGHT, is_left_half);
                         let sub_acc = get_sequence_acc_half(subject, half_offset_j, half_width, half_block_j, block_width, is_left_half);
 
-                        let sco_acc = scores.get_iteration_acc(offset_i, offset_j, height, width, is_left_half, get_iteration_info(block_dia_j, tid_x)); 
-                        let pre_acc = predc.get_iteration_acc(offset_i, offset_j, height, width, get_iteration_info(block_dia_j, tid_x));      
+                        let sco_acc = scores.get_iteration_acc(offset_i, offset_j, height, width, is_left_half, get_iteration_info(block_dia_j, tid_x));
+                        let pre_acc = predc.get_iteration_acc(offset_i, offset_j, height, width, get_iteration_info(block_dia_j, tid_x));
 
                         let diags = height + width - 1;
-                
+
                         let j = tid_x;
 
                         //iterate over diagonals of matrix entries
@@ -155,7 +162,7 @@ fn iteration_partitioned(half_size: Index, num_halfs: Index, block_width: Index,
                             let i = dia_i - j;
 
                             sco_acc.update_begin_line(i);
-                    
+
                             if i >= 0 && i < height && j < width{
                                 body(i, j, que_acc, sub_acc, sco_acc, pre_acc);
                             }
@@ -182,7 +189,7 @@ fn iteration_blockwise(block_width: Index, splits: Splits) -> IterationFn {
         let grid  = (num_blocks * block_width, 1, 1);
 
         for tid, bid, bdim, gdim, gid in acc.exec(grid, block) {
-                
+
             let (tidx,  _,  _) = tid;
             let (bidx,  _,  _) = bid;
 
@@ -197,8 +204,8 @@ fn iteration_blockwise(block_width: Index, splits: Splits) -> IterationFn {
             let que_acc = get_sequence_acc_offset(read_sequence(query), write_sequence(query), offset_i);
             let sub_acc = get_sequence_acc_offset(read_sequence(subject), write_sequence(subject), offset_j);
 
-            let sco_acc = scores.get_iteration_acc(offset_i, offset_j, height, width, false, get_iteration_info(block_j, tid_x)); 
-            let pre_acc = predc.get_iteration_acc(offset_i, offset_j, height, width, get_iteration_info(block_j, tid_x));      
+            let sco_acc = scores.get_iteration_acc(offset_i, offset_j, height, width, false, get_iteration_info(block_j, tid_x));
+            let pre_acc = predc.get_iteration_acc(offset_i, offset_j, height, width, get_iteration_info(block_j, tid_x));
 
             let diags = width + height - 1;
 
@@ -210,7 +217,7 @@ fn iteration_blockwise(block_width: Index, splits: Splits) -> IterationFn {
                 let i = dia_i - j;
 
                 sco_acc.update_begin_line(i);
-                    
+
                 if i >= 0 && i < height{
                     body(i, j, que_acc, sub_acc, sco_acc, pre_acc);
                 }
@@ -232,7 +239,7 @@ fn iteration_tb(predc_cpu: MatrixS, splits: Splits, subject_length: Index, block
 
     let mut offset_i = 0;
     let mut end_i    = 0;
-    
+
     for block in range(0, splits_cpu.length){
 
         offset_i = end_i;
@@ -254,9 +261,9 @@ fn iteration_tb(predc_cpu: MatrixS, splits: Splits, subject_length: Index, block
 
 
 fn iteration_1d(length: Index, body: fn(Index) -> ()) -> (){
-    
+
     let acc = accelerator(device_id);
-    
+
     let num_blocks = round_up_div(length, BLOCK_WIDTH);
     let block = (BLOCK_WIDTH, 1, 1);
     let grid  = (num_blocks * BLOCK_WIDTH, 1, 1);
@@ -268,18 +275,18 @@ fn iteration_1d(length: Index, body: fn(Index) -> ()) -> (){
 }
 
 fn iteration_matrix_1d(matrix: Matrix, length: Index, body: fn(Index, MatrixAcc) -> ()) -> (){
-    
+
     let mat_acc = make_matrix_acc(matrix, read_matrix(matrix), write_matrix(matrix));
-    
+
     for i in iteration_1d(length){
         body(i, mat_acc);
     }
 }
 
 fn iteration_matrix_s_1d(matrix: MatrixS, length: Index, body: fn(Index, MatrixSAcc) -> ()) -> (){
-    
+
     let mat_acc = get_matrix_s_acc(matrix, read_matrix_s(matrix), write_matrix_s(matrix));
-    
+
     for i in iteration_1d(length){
         body(i, mat_acc);
     }
@@ -287,7 +294,7 @@ fn iteration_matrix_s_1d(matrix: MatrixS, length: Index, body: fn(Index, MatrixS
 
 
 fn iteration_vector_1d(vector: Vector, length: Index, body: fn(Index, VectorAcc) -> ()) -> (){
-    
+
     let vec_acc = get_vector_acc(read_vector(vector), write_vector(vector));
 
     for i in iteration_1d(length){
@@ -319,12 +326,12 @@ fn iteration_reduction(vector_gpu: Vector, index_cpu: Vector, score_cpu: Vector,
     let mut swap = true;
 
     let mut len = length;
-    
+
     let vector_1  = create_vector(round_up_div(length, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION) * BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION, 0, acc.alloc);
     let vector_2  = create_vector(round_up_div(length, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION), 0, acc.alloc);
     let indices_1 = alloc_vector(vector_gpu, acc.alloc);
-    let indices_2 = alloc_vector(vector_2, acc.alloc); 
-    
+    let indices_2 = alloc_vector(vector_2, acc.alloc);
+
     copy_vector_offset(vector_gpu, offset + 1, vector_1, 1, length - 1);
     for i, vec_acc in iteration_vector_1d(indices_1, indices_1.length + 1){
         vec_acc.write(i, i + offset);
@@ -378,7 +385,7 @@ fn iteration_reduction(vector_gpu: Vector, index_cpu: Vector, score_cpu: Vector,
     copy_vector(indices_out, index_cpu);
     let vector_out = if swap { vector_1 } else { vector_2 };
     copy_vector(vector_out, score_cpu);
-    
+
     release(vector_1.buf);
     release(vector_2.buf);
     release(indices_1.buf);
@@ -391,12 +398,12 @@ fn iteration_sum_reduction(vector_gpu: Vector, index_cpu: Vector, score_cpu: Vec
     let mut swap = true;
 
     let mut len = length;
-    
+
     let vector_1  = create_vector(round_up_div(length, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION) * BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION, 0, acc.alloc);
     let vector_2  = create_vector(round_up_div(length, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION), 0, acc.alloc);
     let indices_1 = alloc_vector(vector_gpu, acc.alloc);
-    let indices_2 = alloc_vector(vector_2, acc.alloc); 
-    
+    let indices_2 = alloc_vector(vector_2, acc.alloc);
+
     copy_vector_offset(vector_gpu, offset + 1, vector_1, 1, length - 1);
     for i, vec_acc in iteration_vector_1d(indices_1, indices_1.length + 1){
         vec_acc.write(i, i + offset);
@@ -450,7 +457,7 @@ fn iteration_sum_reduction(vector_gpu: Vector, index_cpu: Vector, score_cpu: Vec
     copy_vector(indices_out, index_cpu);
     let vector_out = if swap { vector_1 } else { vector_2 };
     copy_vector(vector_out, score_cpu);
-    
+
     release(vector_1.buf);
     release(vector_2.buf);
     release(indices_1.buf);
@@ -458,12 +465,12 @@ fn iteration_sum_reduction(vector_gpu: Vector, index_cpu: Vector, score_cpu: Vec
 }
 
 
-    
+
 
 fn reduction_kernel(length: Index, get_data: fn(Index) -> ReductionData) -> (){
 
     let acc = accelerator(device_id);
-        
+
     let num_blocks = round_up_div(length, BLOCK_WIDTH * OPS_PER_THREAD_REDUCTION);
     let block = (BLOCK_WIDTH, 1, 1);
     let grid  = (num_blocks * BLOCK_WIDTH, 1, 1);
@@ -486,7 +493,7 @@ fn reduction_kernel(length: Index, get_data: fn(Index) -> ReductionData) -> (){
             data.reduce_global(i, tid_x);
             i += gdim_x;
         }
-                        
+
         let mut s = BLOCK_WIDTH / 2;
         while s > 0 {
             acc.barrier();

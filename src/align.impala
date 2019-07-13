@@ -32,7 +32,7 @@ struct ScoringScheme {
 
 
 //-------------------------------------------------------------------
-// predecessor encoding/decoding 
+// predecessor encoding/decoding
 //-------------------------------------------------------------------
 static PRED_NONE   = 0 as Predecessor;
 static PRED_GAP_Q  = 1 as Predecessor;
@@ -41,9 +41,9 @@ static PRED_NO_GAP = 3 as Predecessor;
 
 
 //-------------------------------------------------------------------
-// relaxation functions 
+// relaxation functions
 //-------------------------------------------------------------------
-fn relax_global(q: Symbol, s: Symbol, no_gap_entry: Score, gap_q_entry: Score, gap_s_entry: Score, matches: MatchFn, gap: GapFn) -> (Score, Predecessor) 
+fn relax_global(q: Symbol, s: Symbol, no_gap_entry: Score, gap_q_entry: Score, gap_s_entry: Score, matches: MatchFn, gap: GapFn) -> (Score, Predecessor)
 {
     //no gaps
     let mut score = no_gap_entry + matches(q,s);
@@ -55,7 +55,7 @@ fn relax_global(q: Symbol, s: Symbol, no_gap_entry: Score, gap_q_entry: Score, g
         score = qgap;
         predc = PRED_GAP_Q;
     }
-    
+
     //subject gap
     let sgap = gap_s_entry + gap(q,s);
     if sgap > score {
@@ -66,18 +66,17 @@ fn relax_global(q: Symbol, s: Symbol, no_gap_entry: Score, gap_q_entry: Score, g
     (score, predc)
 }
 
-fn relax_local(q: Symbol, s: Symbol, no_gap_entry: Score, gap_q_entry: Score, gap_s_entry: Score, matches: MatchFn, gap: GapFn) -> (Score, Predecessor) 
+fn relax_local(q: Symbol, s: Symbol, no_gap_entry: Score, gap_q_entry: Score, gap_s_entry: Score, matches: MatchFn, gap: GapFn) -> (Score, Predecessor)
 {
     let (mut score, mut predc) = relax_global(q, s, no_gap_entry, gap_q_entry, gap_s_entry, matches, gap);
-    
+
     if 0 > score {
         score = 0;
         predc = PRED_NONE;
     }
-    
+
     (score, predc)
 }
-
 
 //-------------------------------------------------------------------
 // matrix initialization
@@ -109,7 +108,7 @@ fn semiglobal_scheme(scoring: ScoringScheme) -> AlignmentScheme {
         init_predc_rows: init_predc_local,
         init_predc_cols: init_predc_local,
         get_scoring:     get_semiglobal_scoring_linmem,
-        relax:           |q, s, ng, gq, gs| relax_global(q, s, ng, gq, gs, scoring.matches, scoring.gaps) 
+        relax:           |q, s, ng, gq, gs| relax_global(q, s, ng, gq, gs, scoring.matches, scoring.gaps)
     }
 }
 
@@ -119,7 +118,7 @@ fn local_scheme(scoring: ScoringScheme) -> AlignmentScheme {
         init_predc_rows: init_predc_local,
         init_predc_cols: init_predc_local,
         get_scoring:     get_local_scoring_linmem,
-        relax:           |q, s, ng, gq, gs| relax_local(q, s, ng, gq, gs, scoring.matches, scoring.gaps) 
+        relax:           |q, s, ng, gq, gs| relax_local(q, s, ng, gq, gs, scoring.matches, scoring.gaps)
     }
 }
 
@@ -141,7 +140,7 @@ fn constant_gaps(gap: Score) -> GapFn
 //-------------------------------------------------------------------
 // scoring schemes
 //-------------------------------------------------------------------
-fn linear_scoring_scheme(same: Score, diff: Score, gap: Score) -> ScoringScheme 
+fn linear_scoring_scheme(same: Score, diff: Score, gap: Score) -> ScoringScheme
 {
     ScoringScheme {
         matches: simple_matches(same,diff),
@@ -149,22 +148,22 @@ fn linear_scoring_scheme(same: Score, diff: Score, gap: Score) -> ScoringScheme
     }
 }
 
-
-fn affine_scoring_scheme(same: Score, diff: Score, 
+/*
+fn affine_scoring_scheme(same: Score, diff: Score,
                          gapInit: Score, gapExtend: Score,
-                         gapStore: ScoringMatrixAcc) -> ScoringScheme 
+                         gapStore: ScoringMatrixAcc) -> ScoringScheme
 {
     ScoringScheme {
         matches: simple_matches(same,diff),
-        gaps:    |q,s| { 
+        gaps:    |q,s| {
             let g1 = gapStore.read_gap_q(q as Index, s as Index);
             let g2 = gapStore.read_gap_s(q as Index, s as Index);
-            if g1 < g2 { gapInit + gapExtend * g1 } 
+            if g1 < g2 { gapInit + gapExtend * g1 }
             else { gapInit + gapExtend * g2 }
         }
     }
 }
-
+*/
 
 //-------------------------------------------------------------------
 // alignment
@@ -172,7 +171,7 @@ fn affine_scoring_scheme(same: Score, diff: Score,
 fn relax(query: Sequence, subject: Sequence, scoring: ScoringMatrix, predecessors: PredecessorMatrix, scheme: AlignmentScheme, iter: IterationFn) -> (){
 
     for i, j, que_acc, sub_acc, sco_acc, pre_acc in iter(query, subject, scoring, predecessors) {
-        
+
         let sym_q = que_acc.read(i);
         let sym_s = sub_acc.read(j);
 
@@ -181,15 +180,32 @@ fn relax(query: Sequence, subject: Sequence, scoring: ScoringMatrix, predecessor
         let gap_s_entry  = sco_acc.read_gap_s (i, j);
 
         let (score, predc) = scheme.relax(sym_q, sym_s, no_gap_entry, gap_q_entry, gap_s_entry);
-        
+
+        //TODO
+        /*
+        print_string("ENTRIES of (");
+        print_i32(i);
+        print_string("|");
+        print_i32(j);
+        print_string("): ");
+        print_i32(no_gap_entry);
+        print_string(" - ");
+        print_i32(gap_q_entry);
+        print_string(" - ");
+        print_i32(gap_s_entry);
+        print_string(" >> ");
+        print_i32(score);
+        print_string("\n");
+        */
+
         sco_acc.write(i, j, score);
         pre_acc.write(i, j, predc);
     }
 }
 
-fn traceback_full(query_cpu: Sequence, subject_cpu: Sequence, 
+fn traceback_full(query_cpu: Sequence, subject_cpu: Sequence,
                   query_out: Sequence, subject_out: Sequence,
-                  scheme: AlignmentScheme) -> Score 
+                  scheme: AlignmentScheme) -> Score
 {
     let query = sequence_to_device(query_cpu, get_padding_h());
     let subject = sequence_to_device(subject_cpu, get_padding_w());
@@ -211,13 +227,14 @@ fn traceback_full(query_cpu: Sequence, subject_cpu: Sequence,
     release_dev(query.buf);
     release_dev(subject.buf);
     release_dev(predc_matrix.buf);
-    
+
     sco
 }
 
-fn score(query_cpu: Sequence, subject_cpu: Sequence, 
-         scheme: AlignmentScheme) -> Score 
+fn score(query_cpu: Sequence, subject_cpu: Sequence,
+         scheme: AlignmentScheme) -> Score
 {
+    print_string("\n>>>calling score()\n");
     let query = sequence_to_device(query_cpu, get_padding_h());
     let subject = sequence_to_device(subject_cpu, get_padding_w());
 
@@ -226,18 +243,25 @@ fn score(query_cpu: Sequence, subject_cpu: Sequence,
     relax(query, subject, scoring.get_scoring_matrix(), no_predc(), scheme, iteration);
 
     let sco = scoring.get_score();
-        
+
     scoring.release();
     release_dev(query.buf);
     release_dev(subject.buf);
 
+    //if(comm().rank() == 0) {
+        print_string("FINAL SCORE: ");
+        print_i32(sco);
+        print_string("\n");
+    //}
+
     sco
 }
 
-fn traceback_lintime(query_cpu: Sequence, subject_cpu: Sequence, 
+fn traceback_lintime(query_cpu: Sequence, subject_cpu: Sequence,
                      query_out: Sequence, subject_out: Sequence,
-                     scheme: AlignmentScheme) -> Score 
+                     scheme: AlignmentScheme) -> Score
 {
+    print_string("\n>>>calling traceback_lintime()\n");
     let query = sequence_to_device(query_cpu, get_padding_h());
     let subject = sequence_to_device(subject_cpu, get_padding_w());
 
@@ -249,7 +273,7 @@ fn traceback_lintime(query_cpu: Sequence, subject_cpu: Sequence,
     let mut max_height = query.length;
 
     let splits = create_splits(query.length, subject.length, part_width, MIN_PART_WIDTH_HB);
-    
+
     // timer_start();
     while part_width > MIN_PART_WIDTH_HB {
         max_height = traceback_lintime_step(query, subject, part_width, splits, max_height, scheme);
@@ -295,7 +319,7 @@ fn traceback_lintime_trace(query: Sequence, subject: Sequence, splits: Splits, t
 
     let scoring = get_scoring_hb_blockwise_linmem(MIN_PART_WIDTH_HB, scheme);
     let predc = predecessors_blockwise(query.length, num_blocks_j, MIN_PART_WIDTH_HB, scheme);
-    
+
     let iter = iteration_blockwise(MIN_PART_WIDTH_HB, splits);
     relax(query, subject, scoring.get_scoring_matrix(), predc, scheme, iter);
 
@@ -304,9 +328,8 @@ fn traceback_lintime_trace(query: Sequence, subject: Sequence, splits: Splits, t
     for pre_acc, offset_i, offset_j, block_height, block_width in iteration_tb(predc_matrix, splits, subject.length, MIN_PART_WIDTH_HB){
         tb.traceback_offset(pre_acc, offset_i, offset_j, (block_height -1, block_width -1));
     }
-    
+
     release_dev(predc_matrix.buf);
     scoring.release();
     predc.release();
 }
-

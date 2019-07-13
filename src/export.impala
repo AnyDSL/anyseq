@@ -1,24 +1,34 @@
+extern
+fn comm_init()->() {
+    comm().init();
+}
+
+extern
+fn comm_finish()->() {
+    comm().finalize();
+}
+
 //-------------------------------------------------------------------
 // global alignments
 //-------------------------------------------------------------------
-extern 
+extern
 fn global_alignment_score(
-    query: &[u8], len_q: Index, 
-    subject: &[u8], len_s: Index, 
+    query: &[u8], len_q: Index,
+    subject: &[u8], len_s: Index,
     alQuery: &[u8], alSubject: &[u8]) -> Score
 {
     let que_seq = wrap_sequence(query, len_q);
     let sub_seq = wrap_sequence(subject, len_s);
 
-    score(que_seq, sub_seq, 
+    score(que_seq, sub_seq,
           global_scheme( linear_scoring_scheme(2,-1,-1)) )
 }
 
 
-extern 
+extern
 fn construct_global_alignment(
-    query: &[u8], len_q: Index, 
-    subject: &[u8], len_s: Index, 
+    query: &[u8], len_q: Index,
+    subject: &[u8], len_s: Index,
     alQuery: &[u8], alSubject: &[u8]) -> Score
 {
 
@@ -28,53 +38,54 @@ fn construct_global_alignment(
     let que_out = wrap_sequence(alQuery, len_q+len_s);
     let sub_out = wrap_sequence(alSubject, len_q+len_s);
 
-    traceback_lintime(que_seq, sub_seq, 
+    traceback_lintime(que_seq, sub_seq,
                       que_out, sub_out,
                       global_scheme( linear_scoring_scheme(2,-1,-1)) )
 }
 
-
-extern 
+//TODO
+/*
+extern
 fn construct_global_alignment_fulltb(
-    query: &[u8], len_q: Index, 
-    subject: &[u8], len_s: Index, 
+    query: &[u8], len_q: Index,
+    subject: &[u8], len_s: Index,
     alQuery: &[u8], alSubject: &[u8]) -> Score
 {
 
     let que_seq = wrap_sequence(query, len_q);
     let sub_seq = wrap_sequence(subject, len_s);
-    
+
     let que_out = wrap_sequence(alQuery, len_q+len_s);
     let sub_out = wrap_sequence(alSubject, len_q+len_s);
 
-    traceback_full(que_seq, sub_seq, 
+    traceback_full(que_seq, sub_seq,
                    que_out, sub_out,
                    global_scheme( linear_scoring_scheme(2,-1,-1)) )
 }
-
+*/
 
 
 //-------------------------------------------------------------------
 // semi-global alignments
 //-------------------------------------------------------------------
-extern 
+extern
 fn semiglobal_alignment_score(
-    query: &[u8], len_q: Index, 
-    subject: &[u8], len_s: Index, 
+    query: &[u8], len_q: Index,
+    subject: &[u8], len_s: Index,
     alQuery: &[u8], alSubject: &[u8]) -> Score
 {
     let que_seq = wrap_sequence(query, len_q);
     let sub_seq = wrap_sequence(subject, len_s);
 
-    score(que_seq, sub_seq, 
+    score(que_seq, sub_seq,
           semiglobal_scheme( linear_scoring_scheme(2,-1,-1)) )
 }
 
 
-extern 
+extern
 fn construct_semiglobal_alignment(
-    query: &[u8], len_q: Index, 
-    subject: &[u8], len_s: Index, 
+    query: &[u8], len_q: Index,
+    subject: &[u8], len_s: Index,
     alQuery: &[u8], alSubject: &[u8]) -> Score
 {
 
@@ -84,53 +95,54 @@ fn construct_semiglobal_alignment(
     let que_out = wrap_sequence(alQuery, len_q+len_s);
     let sub_out = wrap_sequence(alSubject, len_q+len_s);
 
-    traceback_lintime(que_seq, sub_seq, 
+    traceback_lintime(que_seq, sub_seq,
                       que_out, sub_out,
                       semiglobal_scheme( linear_scoring_scheme(2,-1,-1)) )
 }
 
-
-extern 
+// TODO
+/*
+extern
 fn construct_semiglobal_alignment_fulltb(
-    query: &[u8], len_q: Index, 
-    subject: &[u8], len_s: Index, 
+    query: &[u8], len_q: Index,
+    subject: &[u8], len_s: Index,
     alQuery: &[u8], alSubject: &[u8]) -> Score
 {
 
     let que_seq = wrap_sequence(query, len_q);
     let sub_seq = wrap_sequence(subject, len_s);
-    
+
     let que_out = wrap_sequence(alQuery, len_q+len_s);
     let sub_out = wrap_sequence(alSubject, len_q+len_s);
 
-    traceback_full(que_seq, sub_seq, 
+    traceback_full(que_seq, sub_seq,
                    que_out, sub_out,
                    global_scheme( linear_scoring_scheme(2,-1,-1)) )
 }
-
+*/
 
 
 //-------------------------------------------------------------------
 // local alignments
 //-------------------------------------------------------------------
-extern 
+extern
 fn local_alignment_score(
-    query: &[u8], len_q: Index, 
-    subject: &[u8], len_s: Index, 
+    query: &[u8], len_q: Index,
+    subject: &[u8], len_s: Index,
     alQuery: &[u8], alSubject: &[u8]) -> Score
 {
     let que_seq = wrap_sequence(query, len_q);
     let sub_seq = wrap_sequence(subject, len_s);
 
-    score(que_seq, sub_seq, 
+    score(que_seq, sub_seq,
           local_scheme( linear_scoring_scheme(2,-1,-1)) )
 }
 
 
-extern 
+extern
 fn construct_local_alignment(
-    query: &[u8], len_q: Index, 
-    subject: &[u8], len_s: Index, 
+    query: &[u8], len_q: Index,
+    subject: &[u8], len_s: Index,
     alQuery: &[u8], alSubject: &[u8]) -> Score
 {
 
@@ -140,29 +152,29 @@ fn construct_local_alignment(
     let que_out = wrap_sequence(alQuery, len_q+len_s);
     let sub_out = wrap_sequence(alSubject, len_q+len_s);
 
-    traceback_lintime(que_seq, sub_seq, 
+    traceback_lintime(que_seq, sub_seq,
                       que_out, sub_out,
                       local_scheme( linear_scoring_scheme(2,-1,-1)) )
 
 }
 
-
-extern 
+// TODO
+/*
+extern
 fn construct_local_alignment_fulltb(
-    query: &[u8], len_q: Index, 
-    subject: &[u8], len_s: Index, 
+    query: &[u8], len_q: Index,
+    subject: &[u8], len_s: Index,
     alQuery: &[u8], alSubject: &[u8]) -> Score
 {
 
     let que_seq = wrap_sequence(query, len_q);
     let sub_seq = wrap_sequence(subject, len_s);
-    
+
     let que_out = wrap_sequence(alQuery, len_q+len_s);
     let sub_out = wrap_sequence(alSubject, len_q+len_s);
 
-    traceback_full(que_seq, sub_seq, 
+    traceback_full(que_seq, sub_seq,
                    que_out, sub_out,
                    global_scheme( linear_scoring_scheme(2,-1,-1)) )
 }
-
-
+*/

@@ -27,27 +27,32 @@ struct ScoringMatrixAcc {
 }
 
 fn get_global_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
-
+    print_string(">>>>get_global_scoring_linmem() with create_scoring_matrix_linmem()\n");
     let score_matrix = create_scoring_matrix_linmem(height, width, scheme.init_scores);
 
-    let get_score =     || get_vector_entry_cpu(score_matrix.get_last_column(), height - 1);
+    let get_score =     || {
+        let mut score = get_vector_entry_cpu(score_matrix.get_last_column(), height - 1);
+        let comm = comm();
+        comm.broadcast(&mut score as COMM_MutBuf, 1, comm.int_t, last_non_empty_rank);
+        score
+    };
     let get_score_pos = || (height - 1, width - 1);
 
     create_scoring(score_matrix, get_score, get_score_pos)
 }
 
 fn get_semiglobal_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
-    
+    print_string(">>>>get_semiglobal_scoring_linmem()\n");
     let score_matrix = create_scoring_matrix_linmem(height, width, scheme.init_scores);
 
     let mut score = SCORE_MIN_VALUE;
     let mut pos   = (-1, -1);
-    
+
     let find_score = || {
-        
+
         let last_row    = score_matrix.get_last_row();
         let last_column = score_matrix.get_last_column();
-        
+
         let (row_score, row_index) = reduce_max(last_row, -1, last_row.length + 1);
 
         if row_score > score {
@@ -77,9 +82,9 @@ fn get_semiglobal_scoring_linmem(height: Index, width: Index, scheme: AlignmentS
 }
 
 fn get_local_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
-    
+    print_string(">>>>get_local_scoring_linmem()\n");
     let score_matrix = create_scoring_matrix_linmem(height, width, scheme.init_scores);
-    
+
     let max_scores = create_vector(get_local_max_vector_size_device(width), get_padding_w(), alloc_device);
     let max_pos_i  = alloc_vector(max_scores, alloc_device);
     let max_pos_j  = alloc_vector(max_scores, alloc_device);
@@ -100,7 +105,7 @@ fn get_local_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme
     let mut score = SCORE_MIN_VALUE;
     let mut pos   = (-1, -1);
 
-    let find_score = || {   
+    let find_score = || {
         let (sco, index) = reduce_max(max_scores, 0, max_scores.length);
 
         score = sco;
@@ -136,16 +141,18 @@ fn get_local_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme
     }
 }
 
-
+//TODO
+/*
 fn get_global_scoring_full_matrix(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
 
     let score_matrix = create_scoring_matrix_full(height, width, scheme.init_scores);
-    
+
     let get_score =     || get_matrix_entry_cpu(score_matrix.get_matrix(), height - 1, width - 1);
     let get_score_pos = || (height - 1, width - 1);
 
     create_scoring(score_matrix, get_score, get_score_pos)
 }
+*/
 
 fn get_scoring_hb_linmem(height: Index, width: Index, part_size: Index, block_width: Index, splits: Splits, scheme: AlignmentScheme) -> Scoring{
 
@@ -172,8 +179,10 @@ fn create_scoring(score_matrix: ScoringMatrix, get_score: fn() -> Score, get_sco
     }
 }
 
+//TODO
+/*
 fn create_scoring_matrix_full(height: Index, width: Index, init_scores: InitScoresFn) -> ScoringMatrix{
-    
+
     let matrix = create_matrix(height, width, get_padding_h(), get_padding_w(), alloc_device);
 
     //initialize matrix
@@ -214,6 +223,7 @@ fn create_scoring_matrix_full(height: Index, width: Index, init_scores: InitScor
     }
 
 }
+*/
 
 fn create_scoring_matrix_linmem(height: Index, width: Index, init_scores: InitScoresFn) -> ScoringMatrix{
 
@@ -231,7 +241,7 @@ fn create_scoring_matrix_linmem(height: Index, width: Index, init_scores: InitSc
 
     for i, row_acc in iteration_vector_1d(row, row.length + 1){
         if i == 0 {
-            row_acc.write(-1, init_scores(height - 1)); 
+            row_acc.write(-1, init_scores(height - 1));
         }else{
             row_acc.write(i-1, init_scores(i-1));
         }
@@ -253,7 +263,7 @@ fn create_scoring_matrix_linmem(height: Index, width: Index, init_scores: InitSc
         get_last_row:          || row,
         get_last_column:       || column,
         get_right_half_column: || column,
-        release:                  release    
+        release:                  release
     }
 
 }

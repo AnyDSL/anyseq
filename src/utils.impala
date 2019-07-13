@@ -10,7 +10,7 @@ fn @abs(a: Index) -> Index { if a < 0 { -a } else { a } }
 
 
 fn @round_up_div(a: Index, b: Index) -> Index{
-    (a + b - 1) / b 
+    (a + b - 1) / b
 }
 
 fn @round_up(num: i32, multiple: i32) -> i32 { ((num + multiple - 1) / multiple) * multiple }
@@ -41,7 +41,7 @@ fn reduce_max(vector: Vector, offset: Index, length: Index) -> (MatrixElem, Matr
 
     let score = sco_acc.read(0);
     let index = ind_acc.read(0);
-    
+
     release(index_vec.buf);
     release(score_vec.buf);
 
@@ -158,6 +158,8 @@ static mut total_kernel_timing = 0i64;
 static mut total_cpu_timing = 0i64;
 
 fn @benchmark(get_time: fn() -> i64, num_iter: i32, body: fn() -> (), sync: fn() -> ()) -> i64 {
+    //TODO
+    body();
     0 as i64
 }
 
@@ -221,4 +223,3 @@ fn timer_stop() -> (){
     print_f64(time as f64 / 1000.0);
     print_string("\n");
 }
-

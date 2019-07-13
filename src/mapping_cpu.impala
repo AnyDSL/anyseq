@@ -28,7 +28,7 @@ fn make_matrix_acc(matrix: Matrix, read: ReadMatrixFn, write: WriteMatrixFn) -> 
 }
 
 fn make_matrix_acc_offset(matrix: Matrix, read: ReadMatrixFn, write: WriteMatrixFn, offset_i: Index, offset_j: Index) -> MatrixAcc{
-    make_matrix_acc_std_offset(matrix, read, write, offset_i, offset_j) 
+    make_matrix_acc_std_offset(matrix, read, write, offset_i, offset_j)
 }
 
 fn get_matrix_s_acc_cpu(matrix: MatrixS) -> MatrixSAcc{
@@ -40,7 +40,7 @@ fn get_matrix_s_acc(matrix: MatrixS, read: ReadMatrixSFn, write: WriteMatrixSFn)
 }
 
 fn get_matrix_s_acc_offset(matrix: MatrixS, read: ReadMatrixSFn, write: WriteMatrixSFn, offset_i: Index, offset_j: Index) -> MatrixSAcc{
-    get_matrix_s_acc_std_offset(matrix, read, write, offset_i, offset_j) 
+    get_matrix_s_acc_std_offset(matrix, read, write, offset_i, offset_j)
 }
 
 fn alloc_device(size: Index) -> Buffer{
@@ -82,4 +82,3 @@ fn get_traceback_acc(block_width: Index, predc: MatrixS, scheme: AlignmentScheme
         }
     }
 }
-

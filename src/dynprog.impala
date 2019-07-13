@@ -57,7 +57,7 @@ fn make_matrix_acc_std_offset(matrix: Matrix, read: ReadMatrixFn, write: WriteMa
 }
 
 fn make_matrix_acc_coal_offset(matrix: Matrix, read: ReadMatrixFn, write: WriteMatrixFn, oi: Index, oj: Index) -> MatrixAcc{
-        
+
     let get_coal_position = |i: Index, j: Index| -> Index {
         ((i + oi + j + oj + 2) % matrix.mem_height) * (matrix.mem_width) + j + oj
     };
@@ -122,7 +122,7 @@ fn get_matrix_s_acc_std_offset(matrix: MatrixS, read: ReadMatrixSFn, write: Writ
 }
 
 fn get_matrix_s_acc_coal_offset(matrix: MatrixS, read: ReadMatrixSFn, write: WriteMatrixSFn, oi: Index, oj: Index) -> MatrixSAcc{
-        
+
     let get_coal_position = |i: Index, j: Index| -> Index {
         ((i + oi + j + oj + 2) % matrix.mem_height) * (matrix.mem_width) + j + oj + 1
     };
@@ -200,11 +200,11 @@ fn get_vector_acc_offset(read: ReadMatrixFn, write: WriteMatrixFn, offset: Index
 
 fn get_rotation_acc(read: ReadMatrixFn, write: WriteMatrixFn, length: Index) -> RotationAcc{
     let vec_acc = get_vector_acc(read, write);
-    
+
     let mut offset_upper  = 0;
     let mut offset_middle = length + 1;
     let mut offset_lower  = 2 * (length + 1);
-    
+
     let rotate = || {
         let temp = offset_upper;
         offset_upper = offset_middle;
@@ -224,7 +224,7 @@ fn get_rotation_acc(read: ReadMatrixFn, write: WriteMatrixFn, length: Index) -> 
 }
 
 //-------------------------------------------------------------------
-// sequence accessor 
+// sequence accessor
 //-------------------------------------------------------------------
 type SequenceElem = u8;
 
@@ -306,4 +306,3 @@ fn write_vector_cpu(vector: Vector) -> WriteMatrixFn { |idx, val| bitcast[&mut[M
 
 fn read_sequence_cpu(sequence: Sequence) -> ReadSequenceFn { |idx| bitcast[&[SequenceElem]](sequence.buf.data)(idx) }
 fn write_sequence_cpu(sequence: Sequence) -> WriteSequenceFn { |idx, val| bitcast[&mut[SequenceElem]](sequence.buf.data)(idx) = val }
-
