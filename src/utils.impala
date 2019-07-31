@@ -100,7 +100,7 @@ fn print_matrix_s(query: Sequence, subject: Sequence, scores: MatrixS) -> () {
 fn print_last_matrix_score(scores: Matrix) -> () {
     let sco_acc = make_matrix_acc_cpu(scores);
     let last_score = sco_acc.read(scores.height-1, scores.width-1);
-    
+
     print_string("\nlast score matrix entry: ");
     print_i32(last_score as i32);
     print_string("\n");
@@ -158,7 +158,6 @@ static mut total_kernel_timing = 0i64;
 static mut total_cpu_timing = 0i64;
 
 fn @benchmark(get_time: fn() -> i64, num_iter: i32, body: fn() -> (), sync: fn() -> ()) -> i64 {
-    //TODO
     body();
     0 as i64
 }

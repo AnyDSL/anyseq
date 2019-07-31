@@ -1,5 +1,5 @@
-static BLOCK_WIDTH  = 1024; //TODO 1024
-static BLOCK_HEIGHT = 1024; //TODO 1024
+static BLOCK_WIDTH  = 1024;
+static BLOCK_HEIGHT = 1024;
 
 struct IterationInfo {
     block_id: Index
@@ -27,14 +27,6 @@ fn iteration(query: Sequence, subject: Sequence, scores: ScoringMatrix, predc: P
     //calculate rank info
     first_local_row = min(comm.rank() * num_blocks_i * BLOCK_HEIGHT, query.length);
     last_local_row = min(first_local_row + num_blocks_i * BLOCK_HEIGHT, query.length);
-
-    //TODO print mpi info
-    print_i32(comm.rank());
-    print_string(" has rows ");
-    print_i32(first_local_row);
-    print_string(" - ");
-    print_i32(last_local_row);
-    print_string("\n");
 
     let send_recv_buffer = alloc_cpu(BLOCK_WIDTH * sizeof[int]());
     let send_recv_data = bitcast[&mut[int]](send_recv_buffer.data);
@@ -75,46 +67,11 @@ fn iteration(query: Sequence, subject: Sequence, scores: ScoringMatrix, predc: P
 
                 real_num_blocks_i++;
 
-                //TODO
-                //print block info
-                /*
-                print_string("[ BLOCK ");
-                print_i32(block_dia_i);
-                print_string(".");
-                print_i32(block_dia_j);
-                print_string(" - (");
-                print_i32(offset_i);
-                print_string(",");
-                print_i32(offset_j);
-                print_string("),(");
-                print_i32(height);
-                print_string(",");
-                print_i32(width);
-                print_string(")");
-                print_string(" - ");
-                print_i32(comm.rank());
-                print_string("]\n");
-                */
-
                 let que_acc = get_sequence_acc_offset(read_sequence_cpu(query), write_sequence_cpu(query), offset_i);
                 let sub_acc = get_sequence_acc_offset(read_sequence_cpu(subject), write_sequence_cpu(subject), offset_j);
 
                 //recv data from other nodes
                 if(block_i % num_blocks_i == 0 && block_i > 0) {
-                    //TODO
-                    /*
-                    print_string("POS (");
-                    print_i32(offset_i);
-                    print_string("|");
-                    print_i32(offset_j);
-                    print_string(") recvs ");
-                    print_i32(width);
-                    print_string(" elems from BLOCK (");
-                    print_i32(block_i-1);
-                    print_string("|");
-                    print_i32(block_j);
-                    print_string(")\n");
-                    */
 
                     comm.recv(send_recv_data as COMM_MutBuf, width, comm.int_t, comm.rank() - 1, block_j);
 
@@ -127,7 +84,6 @@ fn iteration(query: Sequence, subject: Sequence, scores: ScoringMatrix, predc: P
                     sco_acc_old.update_end_line(height - 1);
                 }
 
-                //TODO
                 let sco_acc = scores.get_iteration_acc(offset_i, offset_j, height, width, false, create_iteration_info(block_dia_j));
                 let pre_acc = predc.get_iteration_acc(offset_i, offset_j, height, width, create_iteration_info(block_dia_j));
 
@@ -143,20 +99,6 @@ fn iteration(query: Sequence, subject: Sequence, scores: ScoringMatrix, predc: P
 
                 //send data to other nodes
                 if(block_i % num_blocks_i == (num_blocks_i - 1) && (comm.rank() < comm.size() - 1)) {
-                    //TODO
-                    /*
-                    print_string("POS (");
-                    print_i32(offset_i);
-                    print_string("|");
-                    print_i32(offset_j);
-                    print_string(") sends ");
-                    print_i32(width);
-                    print_string(" elems to BLOCK (");
-                    print_i32(block_i);
-                    print_string("|");
-                    print_i32(block_j);
-                    print_string(")\n");
-                    */
 
                     let vec = scores.get_last_row();
                     let vec_acc = get_vector_acc_cpu(vec);

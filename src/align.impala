@@ -181,23 +181,6 @@ fn relax(query: Sequence, subject: Sequence, scoring: ScoringMatrix, predecessor
 
         let (score, predc) = scheme.relax(sym_q, sym_s, no_gap_entry, gap_q_entry, gap_s_entry);
 
-        //TODO
-        /*
-        print_string("ENTRIES of (");
-        print_i32(i);
-        print_string("|");
-        print_i32(j);
-        print_string("): ");
-        print_i32(no_gap_entry);
-        print_string(" - ");
-        print_i32(gap_q_entry);
-        print_string(" - ");
-        print_i32(gap_s_entry);
-        print_string(" >> ");
-        print_i32(score);
-        print_string("\n");
-        */
-
         sco_acc.write(i, j, score);
         pre_acc.write(i, j, predc);
     }

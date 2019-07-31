@@ -60,14 +60,14 @@ void benchmark_score(const std::string& name,
 void benchmark_alignments(const std::string& q, const std::string& s,
                           std::ostream& os)
 {
-    benchmark_score("global score",
-        global_alignment_score, q, s, os);
+    //benchmark_score("global score",
+  //    global_alignment_score, q, s, os);
 
     //TODO
-    /*
     benchmark_score("semiglobal score",
         semiglobal_alignment_score, q, s, os);
 
+    /*
     benchmark_score("local score",
         local_alignment_score, q, s, os);
 

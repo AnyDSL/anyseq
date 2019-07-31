@@ -52,20 +52,38 @@ fn get_semiglobal_scoring_linmem(height: Index, width: Index, scheme: AlignmentS
 
         let last_row    = score_matrix.get_last_row();
         let last_column = score_matrix.get_last_column();
+        let comm = comm();
 
-        let (row_score, row_index) = reduce_max(last_row, -1, last_row.length + 1);
+        let (row_score, row_index) = reduce_max(last_row, -1 + first_local_row, last_local_row - first_local_row + 1);
 
         if row_score > score {
             score = row_score;
             pos = (height - 1, row_index);
         }
 
-        let (col_score, col_index) = reduce_max(last_column, -1, last_column.length + 1);
+        if(comm.rank() == comm.size() - 1) {
+            let (col_score, col_index) = reduce_max(last_column, -1, last_column.length + 1);
 
-        if col_score > score {
-            score = col_score;
-            pos = (col_index, width - 1);
+            if col_score > score {
+                score = col_score;
+                pos = (col_index, width - 1);
+            }
         }
+
+        //exchange score and position
+        let temp_pos = alloc_cpu(comm.size() * sizeof[int]());
+        let temp_pos_data = bitcast[&mut[int]](temp_pos.data);
+        comm.allgather(&score as COMM_Buf, temp_pos_data as COMM_MutBuf, 1, comm.int_t);
+        let mut max_score = SCORE_MIN_VALUE;
+        let mut max_score_rank = 0;
+        for i in range(0, comm.size()) {
+            if(temp_pos_data(i) > max_score) {
+                max_score = temp_pos_data(i);
+                max_score_rank = i;
+            }
+        }
+        comm.broadcast(&mut score as COMM_MutBuf, 1, comm.int_t, max_score_rank);
+        release(temp_pos);
     };
 
     let get_score = || {
@@ -216,7 +234,7 @@ fn create_scoring_matrix_full(height: Index, width: Index, init_scores: InitScor
     ScoringMatrix{
         get_iteration_acc:       get_iteration_acc,
         get_matrix:           || matrix,
-        get_last_row:            get_last_column, //TODO
+        get_last_row:            get_last_column,
         get_last_column:         get_last_column,
         get_right_half_column:   get_last_column,
         release:                 release
