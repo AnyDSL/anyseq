@@ -1,0 +1,20 @@
+#ifndef INCLUDE_GUARD_ALIGN
+#define INCLUDE_GUARD_ALIGN
+
+#include "ap_axi_sdata.h"
+#include <hls_stream.h>
+
+typedef int16_t ScoreType;
+typedef char Char;
+
+#define PE_COUNT (${PE_COUNT})
+const static unsigned int pe_count = PE_COUNT;
+
+typedef ap_axiu<16 + 8 + 8, 2, 5, 6> InputStreamType;
+
+typedef ap_axiu<16 + 8 + 8, 2, 5, 6> OutputStreamType;
+
+void align(hls::stream<InputStreamType>& sub, Char query[PE_COUNT], int subject_len, int query_len,
+		   hls::stream<OutputStreamType>& wbuff, int32_t* res);
+
+#endif

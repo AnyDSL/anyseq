@@ -1,0 +1,259 @@
+type PEInputsType = Score;
+type PEDataType = Score;
+
+type FeederFn = fn(PEInputsType) -> ();
+type IterFn   = fn(Index, fn(Index) -> ()) -> ();
+type UpdateFn = fn(Index) -> ();
+type RecvFn   = fn(Index) -> ();
+
+struct SysArray {
+  feed_data:      FeederFn,
+  update_all:     fn(IterFn, Index) -> (),
+  propagate_data: fn(IterFn, Index) -> ()
+};
+
+fn @create_sysarray(feed_fn: FeederFn, update_fn: UpdateFn, prop_fn: RecvFn) -> SysArray {
+  SysArray {
+    feed_data:      feed_fn,
+    update_all:     @|iter, pe_count| {
+      for pe in iter(pe_count) {
+        update_fn(pe);
+      }
+    },
+    propagate_data: @|iter, pe_count| {
+      for pe in iter(pe_count) {
+        prop_fn(pe);
+      }
+    }
+  }
+}
+
+type DataVectorValueType = Score;
+
+struct DataVector {
+  read: fn(Index) -> DataVectorValueType,
+  write: fn(Index, DataVectorValueType) -> (),
+
+  size: i32
+};
+
+fn @create_data_vector1(init: DataVectorValueType) -> DataVector {
+  let mut array = [init, .. 1];
+    if(is_hls()) {  }
+  DataVector {
+    read:  @|i| array(i),
+    write: @|i,v| array(i) = v,
+
+    size: 1
+  }
+}
+
+fn @create_data_vector2(init: DataVectorValueType) -> DataVector {
+  let mut array = [init, .. 2];
+    if(is_hls()) {  }
+  DataVector {
+    read:  @|i| array(i),
+    write: @|i,v| array(i) = v,
+
+    size: 2
+  }
+}
+
+fn @create_data_vector4(init: DataVectorValueType) -> DataVector {
+  let mut array = [init, .. 4];
+    if(is_hls()) {  }
+  DataVector {
+    read:  @|i| array(i),
+    write: @|i,v| array(i) = v,
+
+    size: 4
+  }
+}
+
+fn @create_data_vector8(init: DataVectorValueType) -> DataVector {
+  let mut array = [init, .. 8];
+    if(is_hls()) {  }
+  DataVector {
+    read:  @|i| array(i),
+    write: @|i,v| array(i) = v,
+
+    size: 8
+  }
+}
+
+fn @create_data_vector16(init: DataVectorValueType) -> DataVector {
+  let mut array = [init, .. 16];
+    if(is_hls()) {  }
+  DataVector {
+    read:  @|i| array(i),
+    write: @|i,v| array(i) = v,
+
+    size: 16
+  }
+}
+
+fn @create_data_vector32(init: DataVectorValueType) -> DataVector {
+  let mut array = [init, .. 32];
+    if(is_hls()) {  }
+  DataVector {
+    read:  @|i| array(i),
+    write: @|i,v| array(i) = v,
+
+    size: 32
+  }
+}
+
+fn @create_data_vector64(init: DataVectorValueType) -> DataVector {
+  let mut array = [init, .. 64];
+    if(is_hls()) {  }
+  DataVector {
+    read:  @|i| array(i),
+    write: @|i,v| array(i) = v,
+
+    size: 64
+  }
+}
+
+fn @create_data_vector128(init: DataVectorValueType) -> DataVector {
+  let mut array = [init, .. 128];
+    if(is_hls()) {  }
+  DataVector {
+    read:  @|i| array(i),
+    write: @|i,v| array(i) = v,
+    
+    size: 128
+  }
+}
+
+fn @create_data_vector256(init: DataVectorValueType) -> DataVector {
+  let mut array = [init, .. 256];
+    if(is_hls()) {  }
+  DataVector {
+    read:  @|i| array(i),
+    write: @|i,v| array(i) = v,
+
+    size: 256
+  }
+}
+
+fn @create_data_vector512(init: DataVectorValueType) -> DataVector {
+  let mut array = [init, .. 512];
+    if(is_hls()) {  }
+  DataVector {
+    read:  @|i| array(i),
+    write: @|i,v| array(i) = v,
+
+    size: 512
+  }
+}
+
+fn @concat_data_vectors(first: DataVector, second: DataVector) -> DataVector {
+  let total_size = first.size + second.size;
+  DataVector {
+    read:  @|i|   if i < first.size               { first.read(i) }
+             else if i - first.size < second.size { second.read(i - first.size) }
+             else { undef[DataVectorValueType]() },
+    write: @|i,v| if i < first.size               { first.write(i, v) }
+             else if i - first.size < second.size { second.write(i - first.size, v) }
+             else { undef[()]() },
+
+    size: total_size
+  }
+}
+
+fn @create_data_vector(size: Index, init: DataVectorValueType) -> DataVector {
+  let s_1   = size - 1;
+  let s_2   = size - 2;
+  let s_4   = size - 4;
+  let s_8   = size - 8;
+  let s_16  = size - 16;
+  let s_32  = size - 32;
+  let s_64  = size - 64;
+  let s_128 = size - 128;
+  let s_256 = size - 256;
+  let s_512 = size - 512;
+
+  if s_512 >= 0 {
+    let dat = create_data_vector512(init);
+
+    if s_512 > 0 {
+      concat_data_vectors(dat, create_data_vector(s_512, init))
+    } else {
+      dat
+    }
+  } else if s_256 >= 0 {
+    let dat = create_data_vector256(init);
+
+    if s_256 > 0 {
+      concat_data_vectors(dat, create_data_vector(s_256, init))
+    } else {
+      dat
+    }
+  } else if s_128 >= 0 {
+    let dat = create_data_vector128(init);
+
+    if s_128 > 0 {
+      concat_data_vectors(dat, create_data_vector(s_128, init))
+    } else {
+      dat
+    }
+  } else if s_64 >= 0 {
+    let dat = create_data_vector64(init);
+
+    if s_64 > 0 {
+      concat_data_vectors(dat, create_data_vector(s_64, init))
+    } else {
+      dat
+    }
+  } else if s_32 >= 0 {
+    let dat = create_data_vector32(init);
+
+    if s_32 > 0 {
+      concat_data_vectors(dat, create_data_vector(s_32, init))
+    } else {
+      dat
+    }
+  } else if s_16 >= 0 {
+    let dat = create_data_vector16(init);
+
+    if s_16 > 0 {
+      concat_data_vectors(dat, create_data_vector(s_16, init))
+    } else {
+      dat
+    }
+  } else if s_8 >= 0 {
+    let dat = create_data_vector8(init);
+
+    if s_8 > 0 {
+      concat_data_vectors(dat, create_data_vector(s_8, init))
+    } else {
+      dat
+    }
+  } else if s_4 >= 0 {
+    let dat = create_data_vector4(init);
+
+    if s_4 > 0 {
+      concat_data_vectors(dat, create_data_vector(s_4, init))
+    } else {
+      dat
+    }
+  } else if s_2 >= 0 {
+    let dat = create_data_vector2(init);
+
+    if s_2 > 0 {
+      concat_data_vectors(dat, create_data_vector(s_2, init))
+    } else {
+      dat
+    }
+  } else if s_1 >= 0 {
+    let dat = create_data_vector1(init);
+
+    if s_1 > 0 {
+      concat_data_vectors(dat, create_data_vector(s_1, init))
+    } else {
+      dat
+    }
+  } else { undef[DataVector]() }
+}
+
+

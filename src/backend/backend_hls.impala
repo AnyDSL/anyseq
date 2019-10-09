@@ -1,0 +1,16 @@
+fn @accelerator(dev: i32) -> Accelerator { hls_accelerator() }
+static device_id = 0;
+static math = hls_intrinsics;
+fn @is_nvvm() -> bool { false }
+fn @is_cuda() -> bool { false }
+fn @is_opencl() -> bool { false }
+fn @is_amdgpu() -> bool { false }
+fn @is_x86() -> bool { false }
+fn @is_sse() -> bool { false }
+fn @is_avx() -> bool { false }
+fn @is_avx2() -> bool { false }
+fn @is_hls() -> bool { true }
+
+fn @get_vector_length() -> i32 { 1 }
+
+

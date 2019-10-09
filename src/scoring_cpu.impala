@@ -1,4 +1,166 @@
 //-----------------------------------------------------------------------------
+fn global_scoring_linmem(height: Index, width: Index, 
+                         scheme: AlignmentScheme) -> Scoring
+{
+
+    let smat = scoring_matrix_linmem(height, width, scheme.init_scores);
+
+    let get_score =     || vector_entry_cpu(smat.last_col(), height - 1);
+    let get_score_pos = || (height - 1, width - 1);
+
+    scoring(smat, get_score, get_score_pos)
+}
+
+// ----------------------------------------------------------------------------
+fn semiglobal_scoring_linmem(height: Index, width: Index, 
+                             scheme: AlignmentScheme) -> Scoring
+{
+    let smat = scoring_matrix_linmem(height, width, scheme.init_scores);
+
+    let mut score = SCORE_MIN_VALUE;
+    let mut pos   = (-1, -1);
+    
+    let find_score = || {
+        
+        let last_row    = smat.last_row();
+        let last_column = smat.last_col();
+        
+        let (row_score, row_index) = reduce_max(last_row, -1, last_row.length + 1);
+
+        if row_score > score {
+            score = row_score;
+            pos = (height - 1, row_index);
+        }
+
+        let (col_score, col_index) = reduce_max(last_column, -1, last_column.length + 1);
+
+        if col_score > score {
+            score = col_score;
+            pos = (col_index, width - 1);
+        }
+    };
+
+    let get_score = || {
+        if score == SCORE_MIN_VALUE { find_score() }
+        score
+    };
+
+    let get_score_pos = || {
+        if score == SCORE_MIN_VALUE { find_score() }
+        pos
+    };
+
+    scoring(smat, get_score, get_score_pos)
+}
+
+// ----------------------------------------------------------------------------
+fn local_scoring_linmem(height: Index, width: Index,
+                        scheme: AlignmentScheme) -> Scoring 
+{
+    let smat = scoring_matrix_linmem(height, width, scheme.init_scores);
+    
+    let max_scores = create_vector(local_max_vector_size_device(width), padding_w(), alloc_device);
+    let max_pos_i  = alloc_vector(max_scores, alloc_device);
+    let max_pos_j  = alloc_vector(max_scores, alloc_device);
+
+    for i, sco in iteration_vector_1d(max_scores, max_scores.length) {
+        sco.write(i, SCORE_MIN_VALUE);
+    }
+
+    let local_score_matrix = Scores {
+        iter_view:      local_linmem_iter_view_device(smat, max_scores, max_pos_i, max_pos_j),
+        matrix:         smat.matrix,
+        last_row:       smat.last_row,
+        last_col:       smat.last_col,
+        right_half_col: smat.last_col,
+        release:        smat.release
+     };
+
+    let mut score = SCORE_MIN_VALUE;
+    let mut pos   = (-1, -1);
+
+    let find_score = || {   
+        let (sco, index) = reduce_max(max_scores, 0, max_scores.length);
+
+        score = sco;
+        let pos_i = vector_entry_cpu(max_pos_i, index);
+        let pos_j = vector_entry_cpu(max_pos_j, index);
+        pos = (pos_i, pos_j);
+    };
+
+    let get_score = || {
+        if score == SCORE_MIN_VALUE { find_score() }
+        score
+    };
+
+    let get_score_pos = || {
+        if score == SCORE_MIN_VALUE { find_score() }
+        pos
+    };
+
+    let release = || {
+        local_score_matrix.release();
+        release(max_scores.buf);
+        release(max_pos_i.buf);
+        release(max_pos_j.buf);
+    };
+
+    Scoring{
+        matrix:             || local_score_matrix,
+        score:              get_score,
+        score_pos:          get_score_pos,
+        left_half_scores:   local_score_matrix.last_col,
+        right_half_scores:  local_score_matrix.right_half_col,
+        release:            release
+    }
+}
+
+// ----------------------------------------------------------------------------
+fn scoring_matrix_linmem(height: Index, width: Index, init_scores: InitScoresView) 
+    -> Scores
+{
+    let column  = create_vector(height, padding_h(), alloc_device);
+    let row     = create_vector(width, padding_w(), alloc_device);
+    let corners = create_vector(ceil_div(width, BLOCK_WIDTH) - 1, padding_w(), alloc_device);
+
+    for i, c in iteration_vector_1d(column, column.length + 1){
+        if i == 0 {
+            c.write(-1, init_scores.read(width - 1));
+        }else{
+            c.write(i-1, init_scores.read(i-1));
+        }
+    }
+
+    for i, r in iteration_vector_1d(row, row.length + 1){
+        if i == 0 {
+            r.write(-1, init_scores.read(height - 1)); 
+        }else{
+            r.write(i-1, init_scores.read(i-1));
+        }
+    }
+
+    for i, cor in iteration_vector_1d(corners, corners.length + 1){
+        cor.write(i-1, init_scores.read(i * BLOCK_WIDTH - 1));
+    }
+
+    let release = || -> () {
+        release(column.buf);
+        release(row.buf);
+        release(corners.buf);
+    };
+
+    Scores {
+        iter_view:       linmem_iter_view_device(column, row, corners),
+        matrix:          || create_matrix(0, 0, 0, 0, alloc_device), // not supported with linmem matrix
+        last_row:        || row,
+        last_col:        || column,
+        right_half_col:  || column,
+        release:         release    
+    }
+
+}
+
+//-----------------------------------------------------------------------------
 fn linmem_iter_view_device(col: Vector, row: Vector, corners: Vector) 
     -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView
 {

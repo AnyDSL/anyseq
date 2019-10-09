@@ -1,0 +1,4 @@
+
+fn @is_global()     -> bool { false }
+fn @is_local()      -> bool { false }
+fn @is_semiglobal() -> bool { true }

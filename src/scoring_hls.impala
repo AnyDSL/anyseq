@@ -1,0 +1,348 @@
+
+static READ_TOP_ROW_FLAG     = 1 << 0;
+
+struct InitScoresView {
+  read:  fn(Index) -> Score,
+  write: fn(Index, Score) -> (),
+
+  read_top_row:      fn(Index) -> Score,
+  write_top_row:     fn(Index, Score) -> (),
+
+  
+
+  matches: MatchFn
+}
+fn @init_scores_view(read: fn(Index) -> Score, write: fn(Index, Score) -> (), sc: ScoringScheme) -> InitScoresView{
+    // we trick a bit by ignoring the argument functions (the PS provides init scores to PL, which we aren't modeling)
+    let acc = accelerator(device_id);
+    let left_column = acc.alloc(5 * sizeof[Score]());
+    let top_row = acc.alloc(7 * sizeof[i16]());
+    
+    InitScoresView{
+      read:  @(?i)|i|   bitcast[&[1][Score]](left_column.data)(i),
+      write: @(?i)|i,v| bitcast[&mut[1][Score]](left_column.data)(i) = v,
+
+      read_top_row:      @(?i)|i|   (bitcast[&[1][i16]](top_row.data)(i)) as Score,
+      write_top_row:     @(?i)|i,v| undef[()](),
+
+      matches: sc.matches
+    }
+}
+fn @global_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
+    let score_matrix = create_scoring_matrix_linmem(height, width, scheme.init_scores,
+                                                    READ_TOP_ROW_FLAG);
+    scoring(score_matrix, || undef[Score](), || undef[(Index, Index)]())
+}
+
+fn @semiglobal_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
+    let score_matrix = create_scoring_matrix_linmem(height, width, scheme.init_scores, 0);
+    let maxs = create_maximums_array(PE_COUNT);
+
+    let semiglobal_score_matrix = Scores{
+        iter_view:     semiglobal_linmem_iter_view_device(score_matrix, maxs, scheme.init_scores),
+        matrix:            score_matrix.matrix,
+        last_row:          score_matrix.last_row,
+        last_col:       score_matrix.last_col,
+        right_half_col: score_matrix.last_col,
+        release:               score_matrix.release
+    };
+
+    Scoring{
+        matrix:   || semiglobal_score_matrix,
+        score:            || undef[Score](),
+        score_pos:        || undef[(Index, Index)](),
+        left_half_scores:    semiglobal_score_matrix.last_col,
+        right_half_scores:   semiglobal_score_matrix.right_half_col,
+        release:              || ()
+    }
+}
+
+struct MaximumsArray {
+  get_maxij_old: fn(Index) -> Score,
+  get_imaxi_1j: fn(Index) -> Score,
+  
+  write_maxij_old: fn(Index, Score) -> (),
+  write_imaxi_1j: fn(Index, Score) -> (),
+};
+fn @create_maximums_array(size: i32) -> MaximumsArray{
+  let maxij_old = create_data_vector(size, SCORE_MIN_VALUE as Score);
+  let imaxi_1j = create_data_vector(size, SCORE_MIN_VALUE as Score);
+
+  MaximumsArray {
+    get_maxij_old: maxij_old.read,
+    get_imaxi_1j:  imaxi_1j.read,
+    
+    write_maxij_old: maxij_old.write,
+    write_imaxi_1j:  imaxi_1j.write,
+  }
+}
+
+fn @local_scoring_linmem(height: Index, width: Index, scheme: AlignmentScheme) -> Scoring{
+    let score_matrix = create_scoring_matrix_linmem(height, width, scheme.init_scores, 0);
+    let maxs = create_maximums_array(PE_COUNT);
+
+    let local_score_matrix = Scores{
+        iter_view:     local_linmem_iter_view_device(score_matrix, maxs, scheme.init_scores),
+        matrix:            score_matrix.matrix,
+        last_row:          score_matrix.last_row,
+        last_col:       score_matrix.last_col,
+        right_half_col: score_matrix.last_col,
+        release:               score_matrix.release
+    };
+
+    Scoring{
+        matrix:   || local_score_matrix,
+        score:            || undef[Score](),
+        score_pos:        || undef[(Index, Index)](),
+        left_half_scores:    local_score_matrix.last_col,
+        right_half_scores:   local_score_matrix.right_half_col,
+        release:              || ()
+    }
+}
+struct ScoringArray {
+  // Inputs
+  get_ihi_1j: fn(Index) -> Score,
+  write_ihi_1j: fn(Index, Score) -> (),
+
+  // Score
+  get_hi_1j_1_old: fn(Index) -> Score,
+  get_hij_1_old: fn(Index) -> Score,
+
+  write_hi_1j_1_old: fn(Index, Score) -> (),
+  write_hij_1_old: fn(Index, Score) -> (),
+
+  get_degenerate: fn(Index) -> i8,
+  write_degenerate: fn(Index, i8) -> ()
+};
+fn @create_scoring_array(size: i32) -> ScoringArray {
+  let ihi_1j = create_data_vector(size, 0 as Score);
+
+  let hi_1j_1_old = create_data_vector(size, 0 as Score);
+  let hij_1_old = create_data_vector(size, 0 as Score);
+
+  let degenerate = create_data_vector(size, 0 as Score);
+
+  ScoringArray {
+    get_ihi_1j:        ihi_1j.read,
+    write_ihi_1j:      ihi_1j.write,
+
+    get_hi_1j_1_old:   hi_1j_1_old.read,
+    get_hij_1_old:     hij_1_old.read,
+
+    write_hi_1j_1_old: hi_1j_1_old.write,
+    write_hij_1_old:   hij_1_old.write,
+
+    get_degenerate:    @|i| degenerate.read(i) as i8,
+    write_degenerate:  @|i,v| degenerate.write(i, v as Score)
+  }
+}
+
+fn create_scoring_matrix_linmem(height: Index, width: Index, olddata: InitScoresView, @read_mask: i32) -> Scores{
+    let pe_scoring = create_scoring_array(PE_COUNT);
+    
+    if(read_mask & READ_TOP_ROW_FLAG == READ_TOP_ROW_FLAG) {
+      let mut top_cur = olddata.read_top_row(0);
+      for pe in range(0, PE_COUNT) {
+        let top_next = olddata.read_top_row(pe + 1);
+        pe_scoring.write_hi_1j_1_old(pe, top_cur);
+        pe_scoring.write_hij_1_old(pe, top_next);
+        top_cur = top_next;
+      }
+    } else {
+      for pe in range(0, PE_COUNT) {
+        pe_scoring.write_hi_1j_1_old(pe, 0 as Score);
+        pe_scoring.write_hij_1_old(pe, 0 as Score);
+      }
+    }
+    Scores{
+        iter_view:        linmem_iter_view_device(pe_scoring, olddata),
+        matrix:            || undef[Matrix](),
+        last_row:          || undef[Vector](),
+        last_col:       || undef[Vector](),
+        right_half_col: || undef[Vector](),
+        release:               || ()
+    }
+}
+
+fn linmem_iter_view_device(pe_line: ScoringArray, olddata: InitScoresView) -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView{
+    |offset_i, offset_j, height, width, _, it| -> ScoresView{
+        ScoresView{
+            read_no_gap:       |i, _| { pe_line.get_hi_1j_1_old(i) },
+            read_gap_q:        |i, _| { pe_line.get_hij_1_old(i) },
+            read_gap_s:        |i, _| { pe_line.get_ihi_1j(i) },
+            write:             |i, j, hij| {
+                  if(pe_line.get_degenerate(i) == 0 as i8) {
+                      if(j >= i) {
+                        pe_line.write_hi_1j_1_old(i, pe_line.get_ihi_1j(i));
+                      }
+                      if(it.get_iai() != 4/*SBT_COL_SIZE*/ as Char) {
+                        pe_line.write_hij_1_old(i, hij);
+                      }
+                      else {
+                        pe_line.write_hij_1_old(i, pe_line.get_hij_1_old(i));
+                      }
+                  }
+                  else {
+                      pe_line.write_hij_1_old(i, pe_line.get_ihi_1j(i));
+                  }
+              },
+            update_write:      @|i| {
+                  pe_line.write_ihi_1j(i + 1, pe_line.get_hij_1_old(i));
+              },
+            update_begin_line: @(?k)|k,i|{
+                  if(k == 1) {
+                      pe_line.write_ihi_1j(0, 0 as Score);
+                  }
+                  else {
+                      pe_line.write_ihi_1j(0, i as Score);
+                  }
+              },
+            update_end_line:   |i,bufoff|{
+                  let hij_1_old = pe_line.get_hij_1_old(PE_COUNT - 1);
+                  if(is_hls()) {
+                  if(bufoff >= PE_COUNT - 1 || i + 1 >= 0) {
+                      print_pragma("//tlast = 1;");
+                  } else {
+                      print_pragma("//tlast = 0;");
+                  }
+                  print_pragma("//instore = outs[bufoff_??????];outstore.data = ?PATCH ME?;outstore.keep = instore.keep;outstore.strb = instore.strb;outstore.user = instore.user;outstore.id = instore.id;outstore.dest = instore.dest;outstore.last = tlast;wbuff.write(outstore);");
+                  }
+                  // we choose to use 0 by design! (will be patched)
+                  olddata.write(0, hij_1_old);
+              },
+            block_begin:       |ql,q_acc| {
+                //readQuery
+                for pe in range(0, PE_COUNT){
+        print_pragma("#pragma HLS UNROLL");
+                    if(pe < ql) {
+                      pe_line.write_degenerate(pe, 0 as i8);
+                    }
+                    else {
+                      pe_line.write_degenerate(pe, 1 as i8);
+                    }
+                    pe_line.write_ihi_1j(pe,   0 as Score);
+                }
+            },
+            block_end:         || {
+                it.write_result(pe_line.get_hij_1_old(PE_COUNT - 1));
+            }
+        }
+    }
+}
+
+fn @local_max_vector_size_device(matrix_width: Index) -> Index { matrix_width }
+
+fn local_linmem_iter_view_device(score_matrix: Scores, max_scores: MaximumsArray, olddata: InitScoresView) -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView{
+    |offset_i, offset_j, height, width, is_left_half, it| {
+        let mat_acc = score_matrix.iter_view(offset_i, offset_j, height, width, is_left_half, it);
+
+        ScoresView{
+            read_no_gap:       mat_acc.read_no_gap,
+            read_gap_q:        mat_acc.read_gap_q,
+            read_gap_s:        mat_acc.read_gap_s,
+            write:             |i,j,hij| {
+                mat_acc.write(i, j, hij);
+                let maxij = max(hij, max(max_scores.get_imaxi_1j(i), max_scores.get_maxij_old(i)));
+                max_scores.write_maxij_old(i, maxij);
+            },
+            update_write:      |i| {
+                mat_acc.update_write(i);
+                if(i + 1 < PE_COUNT) {
+                    max_scores.write_imaxi_1j(i + 1, max_scores.get_maxij_old(i));
+                }
+            },
+            update_begin_line: @(?k)|k,i| {
+                mat_acc.update_begin_line(k, i);
+                if(k == 1) {
+                    max_scores.write_imaxi_1j(0, 0 as Score);
+                }
+                else {
+                    max_scores.write_imaxi_1j(0, i as Score);
+                }
+            },
+            update_end_line:   mat_acc.update_end_line,
+            block_begin:       |a,b| {
+                mat_acc.block_begin(a,b);
+                for pe in range(0, PE_COUNT) {
+        print_pragma("#pragma HLS LOOP_UNROLL");
+                  max_scores.write_imaxi_1j(pe, 0 as Score);
+                  max_scores.write_maxij_old(pe, 0 as Score);
+                }
+            },
+            block_end:         || {
+                it.write_result(max_scores.get_maxij_old(PE_COUNT - 1));
+            }
+        }
+    }
+}
+
+
+fn semiglobal_linmem_iter_view_device(score_matrix: Scores, max_scores: MaximumsArray, olddata: InitScoresView) -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView{
+    |offset_i, offset_j, height, width, is_left_half, it| {
+        let mat_acc = score_matrix.iter_view(offset_i, offset_j, height, width, is_left_half, it);
+
+        ScoresView{
+            read_no_gap:       mat_acc.read_no_gap,
+            read_gap_q:        mat_acc.read_gap_q,
+            read_gap_s:        mat_acc.read_gap_s,
+            write:             |i,j,hij| {
+                mat_acc.write(i, j, hij);
+
+                /// rightmost column maximization must happen on PS!!
+                //let is_right  = i == PE_COUNT - 1 && j >= PE_COUNT - 1;
+                let tmpmax = max(max_scores.get_imaxi_1j(i), max_scores.get_maxij_old(i));
+                if((j as i32 - i as i32) >= (it.subject_len - 1)) {
+                    let maxij = max(hij, tmpmax);
+                    max_scores.write_maxij_old(i, maxij);
+                }
+                else {
+                    let maxij = max(max_scores.get_imaxi_1j(i), tmpmax);
+                    max_scores.write_maxij_old(i, maxij);
+                }
+            },
+            update_write:      |i| {
+                mat_acc.update_write(i);
+                if(i + 1 < PE_COUNT) {
+//                    if(max_scores.get_degenerate(i) == 0 as Score) {
+                        max_scores.write_imaxi_1j(i + 1, max_scores.get_maxij_old(i));
+//                    }
+//                    else {
+//                        max_scores.write_imaxi_1j(i + 1, max_scores.get_imaxi_1j(i));
+//                    }
+                }
+            },
+            update_begin_line: mat_acc.update_begin_line,
+            update_end_line:   mat_acc.update_end_line,
+            block_begin:       |a,b| {
+                mat_acc.block_begin(a,b);
+                for pe in range(0, PE_COUNT) {
+            print_pragma("#pragma HLS LOOP_UNROLL");
+                  max_scores.write_imaxi_1j(pe, 0 as Score);
+                  max_scores.write_maxij_old(pe, 0 as Score);
+//                  if(pe < a) {
+//                      max_scores.write_degenerate(pe, 0 as Score);
+//                  }
+//                  else {
+//                      max_scores.write_degenerate(pe, 1 as Score);
+//                  }
+                }
+            },
+            block_end:         || {
+                it.write_result(max_scores.get_maxij_old(PE_COUNT - 1));
+            }
+        }
+    }
+}
+
+fn iter_view_hb_device(column_left: Vector, column_right: Vector, row: Vector, corners: Vector, block_width: Index) -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView{
+    print_string("UNSUPPORTED: get_iteration_acc_hb_device");
+
+    undef[fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView]()
+}
+
+fn iter_view_tb_device(block_width: Index, init_scores: InitScoresView) -> fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView{
+    print_string("UNSUPPORTED: get_iteration_acc_tb_device");
+
+    undef[fn(Index, Index, Index, Index, bool, IterContext) -> ScoresView]()
+}
+

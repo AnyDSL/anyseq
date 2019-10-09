@@ -1,0 +1,185 @@
+struct IterContext {
+  get_iai: fn() -> Char,
+  write_iai: fn(Char) -> (),
+  write_result: fn(Score) -> (),
+
+  subject_len: i32
+}
+
+fn @create_iteration_info(result: Buffer, s_len: i32) -> IterContext {
+    let mut iai_cpy = 4 as Char;
+    IterContext{
+      get_iai:   @|| iai_cpy,
+      write_iai: @|v| iai_cpy = v,
+      
+      write_result: @|v| bitcast[&mut[1][i32]](result.data)(0) = (v as i32),
+
+      subject_len: s_len      
+    }
+}
+
+fn @iteration(query_p: Sequence, subject_p: Sequence, fakescores: Scores, predc: Predecessors, scheme: AlignmentScheme, body: RelaxationBody) -> ()
+{
+    let acc = accelerator(device_id);
+
+    // subjectt will contain a subject sequence letter and a column cell score
+    //   subjectt[i] = sub_seq[i] << 16U | (left_col[i] & 0xFFFF);
+    let subjectt = acc.alloc(1 * sizeof[i32]());
+    let subject_lenn = acc.alloc(3 * sizeof[Index]());
+    let querytt = acc.alloc(2 * sizeof[Char]());
+    let querytt_lenn = acc.alloc(4 * sizeof[Index]());
+    let resultt = acc.alloc(6 * sizeof[i32]());
+
+    for work_item in acc.exec((1,1,1), (1,1,1)) {
+        // IO specification  -  port names are post-patched, so we may hardcode them here....
+        if(is_hls()) {
+        print_pragma("#pragma HLS INTERFACE axis off port=sub");
+        print_pragma("#pragma HLS STREAM variable=sub dim=1");
+        print_pragma("#pragma HLS INTERFACE axis off port=wbuff");
+        print_pragma("#pragma HLS STREAM variable=wbuff dim=1");
+        print_pragma("#pragma HLS INTERFACE s_axilite depth=?PE_COUNT? port=query bundle=CTRL");
+        if(is_global()) { print_pragma("#pragma HLS INTERFACE s_axilite depth=?PE_COUNT+1? port=top_row bundle=CTRL"); }
+        print_pragma("#pragma HLS INTERFACE s_axilite register depth=1 port=subject_len bundle=CTRL");
+        print_pragma("#pragma HLS INTERFACE s_axilite register depth=1 port=query_len bundle=CTRL");
+        print_pragma("#pragma HLS INTERFACE s_axilite register depth=1 port=res bundle=CTRL");
+        print_pragma("#pragma HLS INTERFACE s_axilite port=return bundle=CTRL");
+
+        // some helper stuff. We have to modify the C code by hand later on, so we may as well make our life easier with dirty hacks
+        print_pragma("//InputStreamType instore; InputStreamType outs[PE_COUNT]; OutputStreamType outstore;int tlast;");
+        }
+        let scoring = scheme.scoring(0 as Index, 0 as Index, scheme);
+        let scores = scoring.matrix();
+
+        let query_len = bitcast[&[1][Index]](querytt_lenn.data)(0);
+        let subject_len = bitcast[&[1][Index]](subject_lenn.data)(0);
+
+        let itinf = create_iteration_info(resultt, subject_len);
+        let sco_acc = scores.iter_view(0, 0, 0, PE_COUNT, false, itinf);
+        let pre_acc = predc.iter_view(0, 0, 1, 1, itinf);
+
+        let iai = create_data_vector(PE_COUNT, 0 as Score);
+        let query_cpy = create_data_vector(PE_COUNT, 0 as Score);
+
+        /// readQuery
+        for pe in unroll(0, PE_COUNT){
+            iai.write(pe, 4 as Score);
+            query_cpy.write(pe, bitcast[&[1][Char]](querytt.data)(pe) as i32);
+        }
+        let que_acc = view_sequence(|i|   if i >= PE_COUNT    { 4 as Char } else { query_cpy.read(i) as u8 },
+                                       |i,v| if i >= PE_COUNT    { () } else { query_cpy.write(i, v as i32) });
+            // subject is special as it will use hls::stream type, thus we visibly only access the very first element
+        let mut sub_register = 0 as Char;
+        let sub_acc = view_sequence(|i|   if i >= subject_len { 4 as Char } else { sub_register },
+                                       |i,v| if i >= subject_len { () } else { sub_register = v });
+        sco_acc.block_begin(query_len, que_acc);
+
+        let mut bufoff = 0;
+        let steps = subject_len + max(query_len, PE_COUNT) - 1;
+        /// systolic0
+        for i in range(0, steps) {
+          if(is_hls()) {
+          print_pragma("#pragma HLS PIPELINE II=1");
+          print_pragma("#pragma HLS LOOP_TRIPCOUNT min=4699745 max=4699762 avg=4699762");
+          }
+            if(i < subject_len) {
+                print_pragma("//instore = sub.read();outs[lower_?????? % PE_COUNT] = instore;_????? = instore.data;");
+                let subc_buf_pair = bitcast[&[1][i32]](subjectt.data)(0); // <- done by design, will be post-patched
+
+                let subc = (subc_buf_pair >> 16) as Char;
+                let bufff = (subc_buf_pair << 16) >> 16;
+                sub_acc.write(i, subc);
+                let s = subc;
+                sco_acc.update_begin_line(0, bufff);
+                iai.write(0, s as Score);
+            }
+            else {
+                iai.write(0, 4 as Score);
+                sco_acc.update_begin_line(1, 0);
+            }
+            /// systolic1
+            for pe in unroll_rev(PE_COUNT - 1, -1) {
+                let _iai = iai.read(pe) as Char;
+                fn @iai_reader() -> ReadSequenceFn{
+                  |j| { if j >= pe { itinf.write_iai(_iai); _iai } else { itinf.write_iai(4 as Char); 4 as Char } }
+                }
+                @@(body)(pe, i, que_acc, view_sequence(iai_reader(), |_,_|()),
+                         sco_acc, pre_acc, scheme.relax);
+
+                if(pe + 1 < PE_COUNT) {
+                    sco_acc.update_write(pe);
+                    iai.write(pe + 1, _iai as Score);
+                }
+            }
+            if(i >= PE_COUNT - 1) {
+                sco_acc.update_end_line(i - steps, bufoff);
+
+                if(bufoff >= PE_COUNT - 1) { bufoff = 0; } else { bufoff = bufoff + 1 }
+            }
+        }
+
+        sco_acc.block_end();
+    }
+}
+
+fn iteration_partitioned(half_size: Index, num_halfs: Index, block_width: Index, splits: Splits, max_part_height: Index) -> IterationFn{
+    print_string("UNSUPPORTED: iteration_partitioned");
+
+    undef[IterationFn]()
+}
+
+fn iteration_blockwise(block_width: Index, splits: Splits) -> IterationFn {
+    print_string("UNSUPPORTED: iteration_blockwise");
+
+    undef[IterationFn]()
+}
+
+fn iteration_traceback(predc: Matrix8, splits: Splits, subject_length: Index, block_width: Index, body: fn (Matrix8View, Index, Index, Index, Index) -> ()) -> (){
+    print_string("UNSUPPORTED: iteration_tb");
+
+    undef[()]()
+}
+
+
+fn iteration_1d(length: Index, body: fn(Index) -> ()) -> (){
+    print_string("UNSUPPORTED: iteration_1d");
+
+    undef[()]()
+}
+
+fn iteration_matrix_1d(matrix: Matrix, length: Index, body: fn(Index, MatrixView) -> ()) -> (){
+    print_string("UNSUPPORTED: iteration_matrix_1d");
+
+    undef[()]()
+}
+
+fn iteration_matrix16_1d(matrix: Matrix16, length: Index, body: fn(Index, Matrix16View) -> ()) -> (){
+    print_string("UNSUPPORTED: iteration_matrix16_1d");
+
+    undef[()]()
+}
+
+fn iteration_matrix8_1d(matrix: Matrix8, length: Index, body: fn(Index, Matrix8View) -> ()) -> (){
+    print_string("UNSUPPORTED: iteration_matrix8_1d");
+
+    undef[()]()
+}
+
+fn iteration_vector_1d(vector: Vector, length: Index, body: fn(Index, VectorView) -> ()) -> (){
+    print_string("UNSUPPORTED: iteration_vector_1d");
+
+    undef[()]()
+}
+    
+
+fn iteration_2_vectors_1d(vector_1: Vector, vector_2: Vector, length: Index, body: fn(Index, VectorView, VectorView) -> ()) -> (){
+    print_string("UNSUPPORTED: iteration_2_vectors_1d");
+
+    undef[()]()
+}
+
+fn iteration_reduction(vector: Vector, index_vec: Vector, score_vec: Vector, offset: Index, length: Index, body: fn(Score, Score) -> bool) -> (){
+    print_string("UNSUPPORTED: iteration_reduction");
+
+    undef[()]()
+}
+

@@ -151,11 +151,11 @@ fn hb_sum(col_left: Vector, col_right: Vector, splits: Splits,
                 let right_half_width = min(half_width, subject_length - (part * 2 + 1) * half_width);
                 
                 // value at position -1
-                max = scheme.init_scores(left_half_width - 1) + rcol.read(length - 1);
+                max = scheme.init_scores.read(left_half_width - 1) + rcol.read(length - 1);
                 index = -1;
 
                 // value at position length - 1
-                let last_val = lcol.read(length - 1) + scheme.init_scores(right_half_width -1);
+                let last_val = lcol.read(length - 1) + scheme.init_scores.read(right_half_width -1);
                 if last_val > max {
                     max = last_val;
                     index = length - 1;

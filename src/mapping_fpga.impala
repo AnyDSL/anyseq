@@ -1,0 +1,145 @@
+// ----------------------------------------------------------------------------
+// fundamental accessor functions
+// ----------------------------------------------------------------------------
+static read_sequence  = read_sequence_cpu;
+static write_sequence = write_sequence_cpu;
+
+static read_matrix    = read_matrix_cpu;
+static write_matrix   = write_matrix_cpu;
+static read_matrix16  = read_matrix16_cpu;
+static write_matrix16 = write_matrix16_cpu;
+static read_matrix8   = read_matrix8_cpu;
+static write_matrix8  = write_matrix8_cpu;
+
+static read_vector    = read_vector_cpu;
+static write_vector   = write_vector_cpu;
+
+// ----------------------------------------------------------------------------
+fn @pragma_pipeline() -> () {
+   if is_opencl() { print_pragma("#pragma ii 1"); };
+   if is_hls() { print_pragma("#pragma HLS pipeline II=1"); };
+}
+
+
+// ----------------------------------------------------------------------------
+fn sequences_to_device(query_cpu: Sequence, subject_cpu: Sequence, 
+                       body: fn(Sequence, Sequence) -> ()) -> ()
+{
+    body(query_cpu, subject_cpu);
+}
+
+fn sequence_to_device(sequence_cpu: Sequence, pad: Index) -> Sequence {
+/*
+  let acc = accelerator(device_id);
+  let seq = acc.alloc(pad * sizeof[Char]());
+  let seql = acc.alloc((pad + 1) * sizeof[Index]());
+
+  Sequence {
+    buf: seq,
+    length: bitcast[&[1][Index]](seql.data)(0),
+    mem_length: bitcast[&[1][Index]](seql.data)(0)
+  }
+*/
+    sequence_cpu 
+}
+
+
+// ----------------------------------------------------------------------------
+fn vector_to_device(vector_cpu: Vector, device_vector: Vector) -> () {}
+
+
+// ----------------------------------------------------------------------------
+fn padding_h() -> Index {0}
+fn padding_w() -> Index {0}
+
+
+// ----------------------------------------------------------------------------
+fn alloc_device(size: Index) -> Buffer {
+    alloc_cpu(size)
+}
+
+fn release_device(buf: Buffer) -> () {}
+
+
+// ----------------------------------------------------------------------------
+fn sequence_cpu(device_sequence: Sequence) -> Sequence { device_sequence }
+
+fn matrix16_cpu(device_matrix: Matrix16) -> Matrix16 { device_matrix }
+
+fn matrix8_cpu(device_matrix: Matrix8) -> Matrix8 { device_matrix }
+
+fn vector_cpu(device_vector: Vector) -> Vector { device_vector }
+
+
+// ----------------------------------------------------------------------------
+fn create_device_matrix(height: Index, width: Index) -> Matrix{
+    create_matrix(height, width, 0, 0, alloc_cpu)
+}
+
+fn view_matrix_cpu(matrix: Matrix) -> MatrixView{
+    view_matrix(matrix, read_matrix_cpu(matrix), write_matrix_cpu(matrix))
+}
+
+fn view_matrix(matrix: Matrix, 
+               read: MatrixReadFn, write: MatrixWriteFn) -> MatrixView 
+{
+    view_matrix_offset(matrix, read, write, 0, 0)
+}
+
+fn view_matrix_offset(matrix: Matrix, 
+                      read: MatrixReadFn, write: MatrixWriteFn,
+                      offset_i: Index, offset_j: Index) -> MatrixView
+{
+    view_matrix_std_offset(matrix, read, write, offset_i, offset_j) 
+}
+
+fn view_matrix16_cpu(matrix: Matrix16) -> Matrix16View{
+    view_matrix16(matrix, read_matrix16_cpu(matrix), write_matrix16_cpu(matrix))
+}
+
+fn view_matrix16(matrix: Matrix16, 
+                 read: Matrix16ReadFn, write: Matrix16WriteFn) -> Matrix16View
+{
+    view_matrix16_offset(matrix, read, write, 0, 0)
+}
+
+fn view_matrix16_offset(matrix: Matrix16, 
+                        read: Matrix16ReadFn, write: Matrix16WriteFn, 
+                        offset_i: Index, offset_j: Index) -> Matrix16View
+{
+    view_matrix16_std_offset(matrix, read, write, offset_i, offset_j) 
+}
+
+fn view_matrix8_cpu(matrix: Matrix8) -> Matrix8View{
+    view_matrix8(matrix, read_matrix8_cpu(matrix), write_matrix8_cpu(matrix))
+}
+
+fn view_matrix8(matrix: Matrix8, 
+                read: Matrix8ReadFn, write: Matrix8WriteFn) -> Matrix8View
+{
+    view_matrix8_offset(matrix, read, write, 0, 0)
+}
+
+fn view_matrix8_offset(matrix: Matrix8, 
+                       read: Matrix8ReadFn, write: Matrix8WriteFn, 
+                       offset_i: Index, offset_j: Index) -> Matrix8View
+{
+    view_matrix8_std_offset(matrix, read, write, offset_i, offset_j) 
+}
+
+fn matrix_entry_cpu(device_matrix: Matrix, i: Index, j: Index) -> Score32{
+    view_matrix_cpu(device_matrix).read(i, j)
+}
+
+fn vector_entry_cpu(device_vector: Vector, i: Index) -> Score32{
+    view_vector_cpu(device_vector).read(i)
+}
+
+
+// ----------------------------------------------------------------------------
+fn traceback_view(block_width: Index, predc: Matrix8, scheme: AlignmentScheme) 
+    -> fn(Index, Index, Index, Index, IterContext) -> PredecessorsView
+{
+    undef[fn(Index, Index, Index, Index, IterContext) -> PredecessorsView]()
+}
+  

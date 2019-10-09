@@ -1,0 +1,7 @@
+//----------------------------------------------------------------------------
+// project-wide constants
+//----------------------------------------------------------------------------
+static BLOCK_WIDTH  = PE_COUNT;
+static BLOCK_HEIGHT = 1;
+
+static BLOCK_DIM = (BLOCK_HEIGHT, BLOCK_WIDTH);

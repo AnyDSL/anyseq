@@ -5,8 +5,8 @@ type GapFn          = fn (Char, Char) -> Score;
 type MatchFn        = fn (Char, Char) -> Score;
 type RelaxationFn   = fn (Char, Char, Score, Score, Score) -> (Score, Predecessor);
 type ScoringFn      = fn (Index, Index, AlignmentScheme) -> Scoring;
-type RelaxationBody = fn (Index, Index, SequenceView, SequenceView, ScoresView, PredecessorsView) -> ();
-type IterationFn    = fn (Sequence, Sequence, Scores, Predecessors, RelaxationBody) -> ();
+type RelaxationBody = fn (Index, Index, SequenceView, SequenceView, ScoresView, PredecessorsView, RelaxationFn) -> ();
+type IterationFn    = fn (Sequence, Sequence, Scores, Predecessors, AlignmentScheme, RelaxationBody) -> ();
 type InitScoresFn   = fn (Index) -> Score;
 type InitPredcFn    = fn (Index) -> Predecessor;
 
@@ -17,7 +17,7 @@ type InitPredcFn    = fn (Index) -> Predecessor;
 // alignment parametrization helpers
 //-----------------------------------------------------------------------------
 struct AlignmentScheme {
-    init_scores:     InitScoresFn,
+    init_scores:     InitScoresView,
     init_predc_rows: InitPredcFn,
     init_predc_cols: InitPredcFn,
     scoring:         ScoringFn,
@@ -112,7 +112,7 @@ fn init_predc_local(i: Index) -> Predecessor {
 //-----------------------------------------------------------------------------
 fn global_scheme(scoring: ScoringScheme) -> AlignmentScheme {
     AlignmentScheme {
-        init_scores:     init_scores_global(scoring.gaps),
+        init_scores:     init_scores_view(init_scores_global(scoring.gaps), |_,_|(), scoring),
         init_predc_rows: init_predc_global_rows,
         init_predc_cols: init_predc_global_cols,
         scoring:         global_scoring_linmem,
@@ -123,7 +123,7 @@ fn global_scheme(scoring: ScoringScheme) -> AlignmentScheme {
 //-------------------------------------------------------------------
 fn semiglobal_scheme(scoring: ScoringScheme) -> AlignmentScheme {
     AlignmentScheme {
-        init_scores:     init_scores_local,
+        init_scores:     init_scores_view(init_scores_local, |_,_|(), scoring),
         init_predc_rows: init_predc_local,
         init_predc_cols: init_predc_local,
         scoring:         semiglobal_scoring_linmem,
@@ -134,7 +134,7 @@ fn semiglobal_scheme(scoring: ScoringScheme) -> AlignmentScheme {
 //-------------------------------------------------------------------
 fn local_scheme(scoring: ScoringScheme) -> AlignmentScheme {
     AlignmentScheme {
-        init_scores:     init_scores_local,
+        init_scores:     init_scores_view(init_scores_local, |_,_|(), scoring),
         init_predc_rows: init_predc_local,
         init_predc_cols: init_predc_local,
         scoring:         local_scoring_linmem,
@@ -324,7 +324,7 @@ fn relax(query: Sequence, subject: Sequence,
          scoring: Scores, predecessors: Predecessors, 
          scheme: AlignmentScheme, iter: IterationFn) -> ()
 {
-    for i, j, qry, sub, sco, pre in iter(query, subject, scoring, predecessors) {
+    for i, j, qry, sub, sco, pre, _ in iter(query, subject, scoring, predecessors, scheme) {
         
         let sym_q = qry.read(i);
         let sym_s = sub.read(j);
@@ -333,7 +333,7 @@ fn relax(query: Sequence, subject: Sequence,
         let gap_q_entry  = sco.read_gap_q (i, j);
         let gap_s_entry  = sco.read_gap_s (i, j);
 
-        let (score, predc) = scheme.relax(sym_q, sym_s, no_gap_entry, gap_q_entry, gap_s_entry);
+        let (score, predc) = @@(scheme.relax)(sym_q, sym_s, no_gap_entry, gap_q_entry, gap_s_entry);
         
         sco.write(i, j, score);
         pre.write(i, j, predc);
